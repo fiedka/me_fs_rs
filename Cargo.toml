@@ -1,0 +1,18 @@
+[package]
+name = "me_fs_rs"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "me_fs_rs"
+path = "src/lib.rs"
+
+[[bin]]
+name = "me_fs"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4.4.12", features = ["derive"] }
+zerocopy = "0.7.32"
+zerocopy-derive = "0.7.32"
+

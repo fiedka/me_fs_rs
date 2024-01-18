@@ -15,12 +15,16 @@ struct Args {
 fn main() -> io::Result<()> {
     let args = Args::parse();
     let file = args.file;
-    println!("Scanning {file} for ME FPT");
 
-    let data = fs::read(file).unwrap();
-
-    if let Ok(fpt) = parse(&data) {
-        println!("{fpt:#?}");
+    if let Ok(data) = fs::read(&file) {
+        println!("Scanning {} for ME FPT", &file);
+        if let Ok(fpt) = parse(&data) {
+            println!("{fpt:#?}");
+        }
     }
+    else {
+        println!("Invalid file: {}", &file); 
+    }
+
     Ok(())
 }

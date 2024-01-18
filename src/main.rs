@@ -21,9 +21,8 @@ fn main() -> io::Result<()> {
         if let Ok(fpt) = parse(&data) {
             println!("{fpt:#?}");
         }
-    }
-    else {
-        println!("Invalid file: {}", &file); 
+    } else {
+        println!("Invalid file: {}", &file);
     }
 
     Ok(())

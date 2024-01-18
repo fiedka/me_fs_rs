@@ -41,14 +41,21 @@ pub fn parse(data: &[u8]) -> Result<ME_FPT, String> {
     let mut o = 16;
 
     while o + mem::size_of::<FPT>() <= data.len() {
-        let buf = &data[o..o + 32];
+        let Some(buf) = data.get(o..o + 32) else {
+            return Err("Invalid data".to_string());
+        };
         if let Ok(s) = std::str::from_utf8(&buf[..8]) {
             if s.starts_with("$FPT") {
                 let fpt = FPT::read_from_prefix(&data[o..]).unwrap();
                 let mut entries = Vec::<FPTEntry>::new();
                 for e in 0..fpt.entries as usize {
                     let pos = o + e * 32;
-                    let entry = FPTEntry::read_from_prefix(&data[pos..]).unwrap();
+                    if data.len() <= pos {
+                        return Err("Invalid data".to_string());
+                    }
+                    let Some(entry) = FPTEntry::read_from_prefix(&data[pos..]) else {
+                        return Err("Invalid data".to_string());
+                    };
                     entries.push(entry);
                 }
                 let me_fpt = ME_FPT {

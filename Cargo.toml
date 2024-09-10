@@ -13,6 +13,7 @@ path = "src/main.rs"
 
 [dependencies]
 clap = { version = "4.4.12", features = ["derive"] }
+serde = { version = "1.0.210", features = ["derive"] }
 zerocopy = "0.7.32"
 zerocopy-derive = "0.7.32"
 

@@ -1,3 +1,4 @@
+use serde::{Deserialize, Serialize};
 use std::mem;
 use zerocopy::FromBytes;
 use zerocopy_derive::{AsBytes, FromBytes, FromZeroes};
@@ -5,13 +6,13 @@ use zerocopy_derive::{AsBytes, FromBytes, FromZeroes};
 // see https://github.com/peterbjornx/meimagetool ...intelme/model/fpt/ (Java)
 // and https://github.com/platomav/MEAnalyzer (Python, good luck)
 
-#[derive(AsBytes, FromBytes, FromZeroes, Clone, Copy, Debug)]
+#[derive(AsBytes, FromBytes, FromZeroes, Serialize, Deserialize, Clone, Copy, Debug)]
 #[repr(C)]
 pub struct CodePartitionDirectory {
     // TODO
 }
 
-#[derive(AsBytes, FromBytes, FromZeroes, Clone, Copy, Debug)]
+#[derive(AsBytes, FromBytes, FromZeroes, Serialize, Deserialize, Clone, Copy, Debug)]
 #[repr(C)]
 pub struct FPTEntry {
     signature: [u8; 4],
@@ -19,7 +20,7 @@ pub struct FPTEntry {
     _rest: [u8; 28],
 }
 
-#[derive(AsBytes, FromBytes, FromZeroes, Clone, Copy, Debug)]
+#[derive(AsBytes, FromBytes, FromZeroes, Serialize, Deserialize, Clone, Copy, Debug)]
 #[repr(C)]
 pub struct FPT {
     pub signature: [u8; 4],
@@ -31,7 +32,7 @@ pub struct FPT {
 }
 
 #[allow(non_camel_case_types)]
-#[derive(Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ME_FPT {
     pub header: FPT,
     pub entries: Vec<FPTEntry>,

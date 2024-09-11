@@ -6,10 +6,30 @@ use zerocopy_derive::{AsBytes, FromBytes, FromZeroes};
 // see https://github.com/peterbjornx/meimagetool ...intelme/model/fpt/ (Java)
 // and https://github.com/platomav/MEAnalyzer (Python, good luck)
 
+// see https://troopers.de/downloads/troopers17/TR17_ME11_Static.pdf
 #[derive(AsBytes, FromBytes, FromZeroes, Serialize, Deserialize, Clone, Copy, Debug)]
 #[repr(C)]
+pub struct CPDHeader {
+    pub magic: [u8; 4],
+    pub entries: u32,
+    pub version_or_checksum: u32,
+    pub part_name: [u8; 4],
+}
+
+#[derive(AsBytes, FromBytes, FromZeroes, Serialize, Deserialize, Clone, Copy, Debug)]
+#[repr(C)]
+pub struct CPDEntry {
+    pub name: [u8; 12],
+    pub compression_flag: u32,
+    pub offset: u32,
+    pub size: u32,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[repr(C)]
 pub struct CodePartitionDirectory {
-    // TODO
+    pub header: CPDHeader,
+    pub entries: Vec<CPDEntry>,
 }
 
 // see https://github.com/linuxboot/fiano/blob/main/pkg/intel/me/structures.go
@@ -57,6 +77,7 @@ pub struct FPT {
 pub struct ME_FPT {
     pub header: FPT,
     pub entries: Vec<FPTEntry>,
+    pub directories: Vec<CodePartitionDirectory>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -86,6 +107,18 @@ pub fn get_part_info(n: &str) -> (PartitionType, &str) {
     }
 }
 
+pub fn parse_cpd(data: &[u8]) -> Result<CodePartitionDirectory, String> {
+    let header = CPDHeader::read_from_prefix(data).unwrap();
+    let mut entries = Vec::<CPDEntry>::new();
+    for e in 0..header.entries as usize {
+        let pos = 16 + e * 24;
+        let entry = CPDEntry::read_from_prefix(&data[pos..]).unwrap();
+        entries.push(entry);
+    }
+    let cpd = CodePartitionDirectory { header, entries };
+    Ok(cpd)
+}
+
 pub fn parse(data: &[u8]) -> Result<ME_FPT, String> {
     let mut o = 16;
 
@@ -101,9 +134,29 @@ pub fn parse(data: &[u8]) -> Result<ME_FPT, String> {
                     let entry = FPTEntry::read_from_prefix(&data[pos..]).unwrap();
                     entries.push(entry);
                 }
+
+                let mut directories = Vec::<CodePartitionDirectory>::new();
+                for e in &entries {
+                    let n = std::str::from_utf8(&e.name).unwrap();
+                    if n == "FTPR" || n == "NFTP" {
+                        let o = e.offset as usize;
+                        let s = e.size as usize;
+
+                        let buf = &data[o..o + 4];
+                        if let Ok(sig) = std::str::from_utf8(buf) {
+                            let sig = sig.trim_end_matches(char::from(0));
+                            if sig == "$CPD" {
+                                let cpd = parse_cpd(&data[o..o + s]).unwrap();
+                                directories.push(cpd);
+                            }
+                        }
+                    }
+                }
+
                 let me_fpt = ME_FPT {
                     header: fpt,
                     entries,
+                    directories,
                 };
                 return Ok(me_fpt);
             }

@@ -48,7 +48,8 @@ pub fn parse(data: &[u8]) -> Result<ME_FPT, String> {
                 let fpt = FPT::read_from_prefix(&data[o..]).unwrap();
                 let mut entries = Vec::<FPTEntry>::new();
                 for e in 0..fpt.entries as usize {
-                    let pos = o + e * 32;
+                    // NOTE: Skip $FPT itself
+                    let pos = o + 32 + e * 32;
                     let entry = FPTEntry::read_from_prefix(&data[pos..]).unwrap();
                     entries.push(entry);
                 }

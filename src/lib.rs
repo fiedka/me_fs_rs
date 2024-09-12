@@ -20,9 +20,9 @@ pub struct CPDHeader {
 #[repr(C)]
 pub struct CPDEntry {
     pub name: [u8; 12],
-    pub compression_flag: u32,
     pub offset: u32,
     pub size: u32,
+    pub compression_flag: u32,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

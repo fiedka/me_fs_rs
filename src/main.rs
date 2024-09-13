@@ -7,8 +7,12 @@ use std::io;
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
+    /// Print sprite metadata
+    #[arg(required = false, short, long)]
+    print: bool,
+
     /// File to read
-    #[arg(short, long)]
+    #[arg(index = 1)]
     file: String,
 }
 
@@ -38,7 +42,9 @@ fn print_directories(cpds: &Vec<CodePartitionDirectory>) {
 }
 
 fn print_fpt_entries(entries: &Vec<FPTEntry>) {
-    println!("  name     offset     end         size      type   notes");
+    println!("  name     offset     end         size       type  notes");
+    let mut entries = entries.clone();
+    entries.sort_by_key(|e| e.offset);
     for e in entries {
         let o = e.offset as usize;
         let s = e.size as usize;
@@ -63,16 +69,18 @@ fn main() -> io::Result<()> {
     let data = fs::read(file).unwrap();
 
     if let Ok(fpt) = parse(&data) {
-        let ME_FPT {
-            header,
-            entries,
-            directories,
-        } = fpt;
-        println!("\n{header:#0x?}");
-        println!("\nPartitions:");
-        print_fpt_entries(&entries);
-        println!("\nDirectories:");
-        print_directories(&directories);
+        if args.print {
+            let ME_FPT {
+                header,
+                entries,
+                directories,
+            } = fpt;
+            println!("\n{header:#0x?}");
+            println!("\nPartitions:");
+            print_fpt_entries(&entries);
+            println!("\nDirectories:");
+            print_directories(&directories);
+        }
     }
     Ok(())
 }

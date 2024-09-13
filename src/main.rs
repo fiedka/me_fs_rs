@@ -71,11 +71,12 @@ fn main() -> io::Result<()> {
     if let Ok(fpt) = parse(&data) {
         if args.print {
             let ME_FPT {
+                base,
                 header,
                 entries,
                 directories,
             } = fpt;
-            println!("\n{header:#0x?}");
+            println!("\nFound at 0x{base:08x}: {header:#0x?}");
             println!("\nPartitions:");
             print_fpt_entries(&entries);
             println!("\nDirectories:");

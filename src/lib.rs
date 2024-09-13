@@ -75,6 +75,7 @@ pub struct FPT {
 #[allow(non_camel_case_types)]
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ME_FPT {
+    pub base: usize,
     pub header: FPT,
     pub entries: Vec<FPTEntry>,
     pub directories: Vec<CodePartitionDirectory>,
@@ -120,9 +121,11 @@ pub fn parse_cpd(data: &[u8]) -> Result<CodePartitionDirectory, String> {
 }
 
 pub fn parse(data: &[u8]) -> Result<ME_FPT, String> {
-    let mut o = 16;
+    let mut b = 0;
 
-    while o + mem::size_of::<FPT>() <= data.len() {
+    while b + 16 + mem::size_of::<FPT>() <= data.len() {
+        // first 16 bytes are other stuff
+        let o = b + 16;
         let buf = &data[o..o + 32];
         if let Ok(s) = std::str::from_utf8(&buf[..8]) {
             if s.starts_with("$FPT") {
@@ -139,7 +142,7 @@ pub fn parse(data: &[u8]) -> Result<ME_FPT, String> {
                 for e in &entries {
                     let n = std::str::from_utf8(&e.name).unwrap();
                     if n == "FTPR" || n == "NFTP" {
-                        let o = e.offset as usize;
+                        let o = b + e.offset as usize;
                         let s = e.size as usize;
 
                         let buf = &data[o..o + 4];
@@ -154,6 +157,7 @@ pub fn parse(data: &[u8]) -> Result<ME_FPT, String> {
                 }
 
                 let me_fpt = ME_FPT {
+                    base: b,
                     header: fpt,
                     entries,
                     directories,
@@ -161,7 +165,7 @@ pub fn parse(data: &[u8]) -> Result<ME_FPT, String> {
                 return Ok(me_fpt);
             }
         }
-        o += 16;
+        b += 16;
     }
     Err("No $FPT :(".to_string())
 }

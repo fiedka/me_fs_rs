@@ -4,6 +4,7 @@ use zerocopy::FromBytes;
 
 pub mod cpd;
 pub mod fpt;
+pub mod mfs;
 
 pub use fpt::ME_FPT;
 
@@ -75,6 +76,75 @@ pub fn parse(data: &[u8]) -> Result<ME_FPT, String> {
                                 directories.push(cpd);
                             }
                         }
+                    }
+
+                    if n == "MFS" {
+                        let o = b + e.offset as usize;
+                        let s = e.size as usize;
+                        let end = o + s;
+                        let pages = s / mfs::MFS_PAGE_SIZE;
+                        let n_sys_pages = pages / 12;
+                        let n_data_pages = pages - n_sys_pages - 1;
+
+                        let mut data_pages = Vec::<mfs::MFSDataPage>::new();
+                        let mut sys_pages = Vec::<mfs::MFSSysPage>::new();
+                        let mut other_pages = Vec::<usize>::new();
+                        for pos in (o..end).step_by(mfs::MFS_PAGE_SIZE) {
+                            let buf = &data[pos..pos + 4];
+                            let magic = u32::read_from_prefix(buf).unwrap();
+                            if magic == mfs::MFS_MAGIC {
+                                let p = pos + mfs::MFS_PAGE_HEADER_SIZE;
+                                let c = &data[pos..p];
+                                let header = mfs::MFSPageHeader::read_from_prefix(c).unwrap();
+
+                                let is_data = header.first_chunk > 0;
+                                let slots = if is_data {
+                                    mfs::MFS_DATA_PAGE_SLOTS
+                                } else {
+                                    mfs::MFS_SYS_PAGE_SLOTS
+                                };
+
+                                let mut last_slot = 0;
+                                for slot in 0..slots {
+                                    let s = u16::read_from_prefix(&data[p + slot * 2..]).unwrap();
+                                    if s == mfs::MFS_SLOT_LAST {
+                                        last_slot = slot;
+                                    }
+                                }
+
+                                if is_data {
+                                    let page = mfs::MFSDataPage {
+                                        offset: pos,
+                                        header,
+                                        // a_free: [0u8; 122],
+                                    };
+                                    data_pages.push(page);
+                                } else {
+                                    let busy_slot = u16::read_from_prefix(&data[p..]).unwrap();
+                                    let next_slot = u16::read_from_prefix(&data[p + 2..]).unwrap();
+                                    let page = mfs::MFSSysPage {
+                                        offset: pos,
+                                        header,
+                                        busy_slot,
+                                        next_slot,
+                                        last_slot,
+                                    };
+                                    sys_pages.push(page);
+                                }
+                            } else {
+                                other_pages.push(pos);
+                            }
+                        }
+                        // sort by Update Sequence Number
+                        data_pages.sort_by_key(|p| p.header.usn);
+                        for p in data_pages {
+                            println!("{p:#02x?}")
+                        }
+                        for p in sys_pages {
+                            println!("{p:#02x?}")
+                        }
+                        println!("pages: {pages} sys: {n_sys_pages} data: {n_data_pages}");
+                        println!("no MFS page at {other_pages:08x?}");
                     }
                 }
 

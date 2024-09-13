@@ -124,7 +124,7 @@ pub fn parse(data: &[u8]) -> Result<ME_FPT, String> {
     let mut b = 0;
 
     while b + 16 + mem::size_of::<FPT>() <= data.len() {
-        // first 16 bytes are other stuff
+        // first 16 bytes are potentially other stuff
         let o = b + 16;
         let buf = &data[o..o + 32];
         if let Ok(s) = std::str::from_utf8(&buf[..8]) {
@@ -136,6 +136,12 @@ pub fn parse(data: &[u8]) -> Result<ME_FPT, String> {
                     let pos = o + 32 + e * 32;
                     let entry = FPTEntry::read_from_prefix(&data[pos..]).unwrap();
                     entries.push(entry);
+                }
+
+                // realign base
+                if b % 0x1000 != 0 {
+                    println!("realign");
+                    b = o;
                 }
 
                 let mut directories = Vec::<CodePartitionDirectory>::new();

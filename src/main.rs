@@ -3,13 +3,17 @@ use me_fs_rs::{cpd::CodePartitionDirectory, fpt::FPTEntry, parse, ME_FPT};
 use std::fs;
 use std::io;
 
-/// Simple program to greet a person
+/// Print Intel (CS)ME FPT information
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
-    /// Print sprite metadata
+    /// Print header data
     #[arg(required = false, short, long)]
     print: bool,
+
+    /// Print verbosely, including partitions and directories
+    #[arg(required = false, short, long)]
+    verbose: bool,
 
     /// File to read
     #[arg(index = 1)]
@@ -70,14 +74,16 @@ fn main() -> io::Result<()> {
 
     match parse(&data) {
         Ok(fpt) => {
-            if args.print {
-                let ME_FPT {
-                    base,
-                    header,
-                    entries,
-                    directories,
-                } = fpt;
+            let ME_FPT {
+                base,
+                header,
+                entries,
+                directories,
+            } = fpt;
+            if args.print || args.verbose {
                 println!("\nFound at 0x{base:08x}: {header:#0x?}");
+            }
+            if args.verbose {
                 println!("\nPartitions:");
                 print_fpt_entries(&entries);
                 println!("\nDirectories:");

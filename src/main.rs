@@ -1,5 +1,5 @@
 use clap::Parser;
-use me_fs_rs::{parse, CodePartitionDirectory, FPTEntry, ME_FPT};
+use me_fs_rs::{cpd::CodePartitionDirectory, fpt::FPTEntry, parse, ME_FPT};
 use std::fs;
 use std::io;
 

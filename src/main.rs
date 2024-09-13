@@ -68,19 +68,24 @@ fn main() -> io::Result<()> {
 
     let data = fs::read(file).unwrap();
 
-    if let Ok(fpt) = parse(&data) {
-        if args.print {
-            let ME_FPT {
-                base,
-                header,
-                entries,
-                directories,
-            } = fpt;
-            println!("\nFound at 0x{base:08x}: {header:#0x?}");
-            println!("\nPartitions:");
-            print_fpt_entries(&entries);
-            println!("\nDirectories:");
-            print_directories(&directories);
+    match parse(&data) {
+        Ok(fpt) => {
+            if args.print {
+                let ME_FPT {
+                    base,
+                    header,
+                    entries,
+                    directories,
+                } = fpt;
+                println!("\nFound at 0x{base:08x}: {header:#0x?}");
+                println!("\nPartitions:");
+                print_fpt_entries(&entries);
+                println!("\nDirectories:");
+                print_directories(&directories);
+            }
+        }
+        Err(e) => {
+            println!("Error: {e}");
         }
     }
     Ok(())

@@ -85,10 +85,11 @@ pub fn parse(data: &[u8]) -> Result<ME_FPT, String> {
                         let pages = s / mfs::MFS_PAGE_SIZE;
                         let n_sys_pages = pages / 12;
                         let n_data_pages = pages - n_sys_pages - 1;
+                        let n_data_chunks = n_data_pages * mfs::MFS_DATA_PAGE_CHUNKS;
 
                         let mut data_pages = Vec::<mfs::MFSDataPage>::new();
                         let mut sys_pages = Vec::<mfs::MFSSysPage>::new();
-                        let mut other_pages = Vec::<usize>::new();
+                        let mut blank_page = 0;
                         for pos in (o..end).step_by(mfs::MFS_PAGE_SIZE) {
                             let buf = &data[pos..pos + 4];
                             let magic = u32::read_from_prefix(buf).unwrap();
@@ -132,19 +133,25 @@ pub fn parse(data: &[u8]) -> Result<ME_FPT, String> {
                                     sys_pages.push(page);
                                 }
                             } else {
-                                other_pages.push(pos);
+                                // this should occur exactly once
+                                blank_page = pos;
                             }
                         }
                         // sort by Update Sequence Number
                         data_pages.sort_by_key(|p| p.header.usn);
                         for p in data_pages {
-                            println!("{p:#02x?}")
+                            let o = p.offset;
+                            let f = p.header.first_chunk;
+                            println!("data page @ 0x{o:08x}; first chunk: {f}")
                         }
                         for p in sys_pages {
                             println!("{p:#02x?}")
                         }
-                        println!("pages: {pages} sys: {n_sys_pages} data: {n_data_pages}");
-                        println!("no MFS page at {other_pages:08x?}");
+                        println!("pages: {pages}");
+                        println!("  sys: {n_sys_pages}");
+                        println!("  data: {n_data_pages}");
+                        println!("  blank at 0x{blank_page:08x}");
+                        println!("data chunks: {n_data_chunks}");
                     }
                 }
 

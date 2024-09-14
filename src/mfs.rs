@@ -55,9 +55,24 @@ pub const MFS_SLOT_LAST: u16 = 0x7fff;
 const XXX_MAGIC: u32 = 0x724F_6201;
 
 /*
+data areas
+
+Iterate over all data pages
+  nSysChunks = min(nSysPages, pg.hdr.firstChunk)
+    Iterate over all used chunks on the current page
+      dataChunks[pg.hdr.firstChunk + i] = pg.chunks[i].data
+
+system area
+
 Iterate over system pages in ascending USN order
   Iterate over all used chunks on the current page
-     Calculate chunk size (iChunk) based on pg.axIdx[i]
+    Calculate chunk size (iChunk) based on pg.axIdx[i]
+    sysArea[iChunk*64 : (iChunk+1)*64] = pg.chunks[i].data
+
+found in sys page:
+
+000e86b0: 0162 4f72 0100 0000 808b 0500 0002 0000  .bOr............
+000e86c0: 0000 fd0e f80e 1215 780a 0002 0000 ce14  ........x.......
 
 typedef struct {
     unsigned __int32 sign; // Сигнатура тома == 0x724F6201
@@ -70,7 +85,4 @@ typedef struct {
     T_MFS_Volume_Hdr vol; // Заголовок тома
     unsigned __int16 aFAT[vol.nFiles + nDataChunks]; // Таблица размещения файлов
 } T_MFS_System_Area;
-
-000e86b0: 0162 4f72 0100 0000 808b 0500 0002 0000  .bOr............
-000e86c0: 0000 fd0e f80e 1215 780a 0002 0000 ce14  ........x.......
 */

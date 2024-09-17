@@ -11,9 +11,19 @@ path = "src/lib.rs"
 name = "me_fs"
 path = "src/main.rs"
 
+[[bin]]
+name = "csum"
+path = "bin/csum.rs"
+
+[[bin]]
+name = "crc"
+path = "bin/crc.rs"
+
 [dependencies]
 clap = { version = "4.4.12", features = ["derive"] }
+crc = "3.2.1"
 serde = { version = "1.0.210", features = ["derive"] }
+serde-big-array = "0.5.1"
 zerocopy = "0.7.32"
 zerocopy-derive = "0.7.32"
 

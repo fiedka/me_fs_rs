@@ -57,7 +57,7 @@ fn print_fpt_entries(entries: &Vec<FPTEntry>) {
         let name = std::str::from_utf8(&e.name).unwrap();
         let name = name.trim_end_matches(char::from(0));
 
-        let (part_type, full_name) = me_fs_rs::get_part_info(name);
+        let (part_type, full_name) = me_fs_rs::fpt::get_part_info(name);
         let part_info = format!("{part_type:?}: {full_name}");
         let name_offset_end_size = format!("{name:>4} @ 0x{o:08x}:0x{end:08x} (0x{s:08x})");
 

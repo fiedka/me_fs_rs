@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use serde_big_array::BigArray;
 use zerocopy_derive::{FromBytes, FromZeroes};
 
 // see https://live.ructf.org/intel_me.pdf slide 35
@@ -22,26 +23,26 @@ pub struct MFSPageHeader {
 pub struct MFSSysPage {
     pub offset: usize,
     pub header: MFSPageHeader,
-    pub busy_slot: u16, // aka axIdx
-    pub next_slot: u16, // next slot to use
-    pub last_slot: usize,
+    #[serde(with = "BigArray")]
+    pub slots: [u16; MFS_SYS_PAGE_SLOTS],
 }
-
-// #[derive(serde::Deserialize)]
-// type DataPageSlots = [u8; MFS_DATA_PAGE_SLOTS];
 
 #[derive(FromBytes, FromZeroes, Serialize, Deserialize, Clone, Copy, Debug)]
 #[repr(C)]
 pub struct MFSDataPage {
     pub offset: usize,
     pub header: MFSPageHeader,
-    // pub a_free: DataPageSlots,
+    #[serde(with = "BigArray")]
+    pub a_free: [u8; MFS_DATA_PAGE_SLOTS],
 }
 
+// XXX: this yields 20... why?
 pub const MFS_PAGE_HEADER_SIZE: usize = std::mem::size_of::<MFSPageHeader>();
 
 pub const MFS_PAGE_SIZE: usize = 0x2000;
-pub const MFS_CHUNK_SIZE: usize = 0x40;
+pub const MFS_CHUNK_DATA_SIZE: usize = 0x40;
+// + 2 bytes checksum
+pub const MFS_CHUNK_SIZE: usize = MFS_CHUNK_DATA_SIZE + 2;
 
 pub const MFS_SYS_PAGE_CHUNKS: usize = 120;
 pub const MFS_SYS_PAGE_SLOTS: usize = MFS_SYS_PAGE_CHUNKS + 1;
@@ -53,6 +54,14 @@ pub const MFS_SLOT_UNUSED: u16 = 0xffff;
 pub const MFS_SLOT_LAST: u16 = 0x7fff;
 
 const XXX_MAGIC: u32 = 0x724F_6201;
+
+#[derive(FromBytes, FromZeroes, Serialize, Deserialize, Clone, Copy, Debug)]
+#[repr(C)]
+pub struct MFSChunk {
+    #[serde(with = "BigArray")]
+    pub data: [u8; MFS_CHUNK_DATA_SIZE],
+    pub crc16: u16,
+}
 
 /*
 data areas
@@ -73,6 +82,9 @@ found in sys page:
 
 000e86b0: 0162 4f72 0100 0000 808b 0500 0002 0000  .bOr............
 000e86c0: 0000 fd0e f80e 1215 780a 0002 0000 ce14  ........x.......
+
+cbTotal = 0x00058b08 = 363272
+nFiles = 0x200 = 512
 
 typedef struct {
     unsigned __int32 sign; // Сигнатура тома == 0x724F6201

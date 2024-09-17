@@ -54,3 +54,32 @@ pub struct ME_FPT {
     pub entries: Vec<FPTEntry>,
     pub directories: Vec<crate::cpd::CodePartitionDirectory>,
 }
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub enum PartitionType {
+    Code,
+    Data,
+    None,
+}
+
+// see https://troopers.de/downloads/troopers17/TR17_ME11_Static.pdf
+pub fn get_part_info(n: &str) -> (PartitionType, &str) {
+    match n {
+        "FTPR" => (PartitionType::Code, "Main code partition"),
+        "FTUP" => (PartitionType::Code, "[NFTP]+[WCOD]+[LOCL]"),
+        "DLMP" => (PartitionType::Code, "IDLM partition"),
+        "PSVN" => (PartitionType::Data, "Secure Version Number"),
+        "IVBP" => (PartitionType::Data, "IV + Bring Up cache"),
+        "MFS" => (PartitionType::Data, "ME Flash File System"),
+        "NFTP" => (PartitionType::Code, "Additional code"),
+        "ROMB" => (PartitionType::Code, "ROM Bypass"),
+        "WCOD" => (PartitionType::Code, "WLAN uCode"),
+        "LOCL" => (PartitionType::Code, "AMT Localization"),
+        "FLOG" => (PartitionType::Data, "Flash Log"),
+        "UTOK" => (PartitionType::Data, "Debug Unlock Token"),
+        "ISHC" => (PartitionType::Code, "Integrated Sensors Hub"),
+        "AFSP" => (PartitionType::None, "8778 55aa signature like MFS"),
+        "FTPM" => (PartitionType::Code, "Firmware TPM (unconfirmed)"),
+        _ => (PartitionType::None, "[> UNKNOWN <]"),
+    }
+}

@@ -18,14 +18,16 @@ pub struct MFSPageHeader {
     pub b0: u8, // always 0
 }
 
+use std::collections::BTreeMap;
+
+pub type Chunks = BTreeMap<u16, MFSChunk>;
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[repr(C)]
 pub struct MFSSysPage {
     pub offset: usize,
     pub header: MFSPageHeader,
-    #[serde(with = "BigArray")]
-    pub slots: [u16; MFS_SYS_PAGE_SLOTS],
-    pub chunks: Vec<MFSChunk>,
+    pub chunks: Chunks,
 }
 
 #[derive(FromBytes, FromZeroes, Serialize, Deserialize, Clone, Copy, Debug)]

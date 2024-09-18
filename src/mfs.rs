@@ -20,6 +20,15 @@ pub struct MFSPageHeader {
 
 use std::collections::BTreeMap;
 
+#[derive(FromBytes, FromZeroes, Serialize, Deserialize, Clone, Copy, Debug)]
+#[repr(C)]
+pub struct MFSSysHeader {
+    pub magic: [u8; 4],
+    pub version: u32,
+    pub chunk_bytes_total: u32,
+    pub files: u16,
+}
+
 pub type Chunks = BTreeMap<u16, MFSChunk>;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

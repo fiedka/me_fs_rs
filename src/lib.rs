@@ -142,6 +142,23 @@ fn parse_mfs(data: &[u8], base: usize, e: &fpt::FPTEntry) {
     let magic = u32::read_from_prefix(&c0.data).unwrap();
     assert_eq!(magic, mfs::XXX_MAGIC);
 
+    let sh = mfs::MFSSysHeader::read_from_prefix(&c0.data).unwrap();
+    println!("{sh:#04x?}");
+
+    // let total_files_and_chunks = sh.files;
+    let total_files_and_chunks = 20;
+    let mut fat = Vec::<u16>::new();
+    for i in 0..total_files_and_chunks as usize {
+        let f = u16::read_from_prefix(&c0.data[14 + i * 2..]).unwrap();
+        fat.push(f);
+    }
+
+    println!("FAT");
+    for f in fat.iter().take(10) {
+        print!(" {f:04x?}");
+    }
+    println!();
+
     for p in sys_pages {
         let o = p.offset;
         let h = p.header;

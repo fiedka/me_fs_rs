@@ -18,13 +18,14 @@ pub struct MFSPageHeader {
     pub b0: u8, // always 0
 }
 
-#[derive(FromBytes, FromZeroes, Serialize, Deserialize, Clone, Copy, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[repr(C)]
 pub struct MFSSysPage {
     pub offset: usize,
     pub header: MFSPageHeader,
     #[serde(with = "BigArray")]
     pub slots: [u16; MFS_SYS_PAGE_SLOTS],
+    pub chunks: Vec<MFSChunk>,
 }
 
 #[derive(FromBytes, FromZeroes, Serialize, Deserialize, Clone, Copy, Debug)]
@@ -53,7 +54,7 @@ pub const MFS_DATA_PAGE_SLOTS: usize = MFS_DATA_PAGE_CHUNKS;
 pub const MFS_SLOT_UNUSED: u16 = 0xffff;
 pub const MFS_SLOT_LAST: u16 = 0x7fff;
 
-const XXX_MAGIC: u32 = 0x724F_6201;
+pub const XXX_MAGIC: u32 = 0x724F_6201;
 
 #[derive(FromBytes, FromZeroes, Serialize, Deserialize, Clone, Copy, Debug)]
 #[repr(C)]

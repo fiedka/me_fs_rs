@@ -127,7 +127,9 @@ fn parse_mfs(data: &[u8], base: usize, e: &fpt::FPTEntry) {
                     offset: pos,
                     header,
                     slots,
+                    chunks,
                 };
+
                 sys_pages.push(page);
             }
         } else {
@@ -143,11 +145,28 @@ fn parse_mfs(data: &[u8], base: usize, e: &fpt::FPTEntry) {
         // println!("data page @ 0x{o:08x}; first chunk: {f}")
     }
     sys_pages.sort_by_key(|p| p.header.usn);
+
+    let s0 = &sys_pages[0];
+
+    let mut slot: (usize, u16) = (0, 0xffff);
+    for (i, s) in s0.slots.iter().enumerate() {
+        if s < &slot.1 {
+            slot = (i, *s);
+        }
+    }
+    let (i, s) = slot;
+    println!("{i} {s:04x}");
+
+    let c0 = &s0.chunks[i];
+    let magic = u32::read_from_prefix(&c0.data).unwrap();
+    println!("{magic:08x} {:08x}", mfs::XXX_MAGIC);
+
     for p in sys_pages {
         let o = p.offset;
         let h = p.header;
         // println!("sys page @ 0x{o:08x} {h:04x?}")
     }
+
     if false {
         println!("pages: {pages}");
         println!("  sys: {n_sys_pages}");

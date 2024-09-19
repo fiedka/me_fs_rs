@@ -50,6 +50,11 @@ fn parse_mfs(data: &[u8], base: usize, e: &fpt::FPTEntry) {
     let mut sys_pages = Vec::<mfs::MFSSysPage>::new();
     let mut blank_page = 0;
 
+    // NOTE: We cannot use MFS_PAGE_HEADER_SIZE here.
+    const SLOTS_OFFSET: usize = 18;
+    const SYS_CHUNKS_OFFSET: usize = SLOTS_OFFSET + 2 * mfs::MFS_SYS_PAGE_SLOTS;
+    const DATA_CHUNKS_OFFSET: usize = SLOTS_OFFSET + 2 * mfs::MFS_DATA_PAGE_SLOTS;
+
     for pos in (o..end).step_by(mfs::MFS_PAGE_SIZE) {
         let buf = &data[pos..pos + 4];
         let magic = u32::read_from_prefix(buf).unwrap();
@@ -60,12 +65,25 @@ fn parse_mfs(data: &[u8], base: usize, e: &fpt::FPTEntry) {
 
             let is_data = header.first_chunk > 0;
             if is_data {
-                let mut last_slot = 0;
-                for slot in 0..mfs::MFS_DATA_PAGE_SLOTS {
-                    let s = u16::read_from_prefix(&data[p + slot * 2..]).unwrap();
+                let slots_offset = pos + SLOTS_OFFSET;
+                let chunks_offset = pos + DATA_CHUNKS_OFFSET;
+
+                let mut chunks = mfs::Chunks::new();
+
+                for chunk_pos in 0..mfs::MFS_DATA_PAGE_SLOTS {
+                    let o = slots_offset + 2 * chunk_pos;
+                    let s = u16::read_from_prefix(&data[o..]).unwrap();
                     if s == mfs::MFS_SLOT_LAST {
-                        last_slot = slot;
+                        break;
                     }
+                    let chunk_index = header.first_chunk + s;
+
+                    // Parse the chunk
+                    let coff = chunks_offset + chunk_pos * mfs::MFS_CHUNK_SIZE;
+                    let cbuf = &data[coff..coff + mfs::MFS_CHUNK_SIZE];
+                    let c = mfs::MFSChunk::read_from_prefix(cbuf).unwrap();
+
+                    chunks.insert(chunk_index, c);
                 }
 
                 let mut a_free = [0u8; mfs::MFS_DATA_PAGE_SLOTS];
@@ -77,10 +95,6 @@ fn parse_mfs(data: &[u8], base: usize, e: &fpt::FPTEntry) {
                 };
                 data_pages.push(page);
             } else {
-                // NOTE: We cannot use MFS_PAGE_HEADER_SIZE here.
-                const SLOTS_OFFSET: usize = 18;
-                const SYS_CHUNKS_OFFSET: usize = SLOTS_OFFSET + 2 * mfs::MFS_SYS_PAGE_SLOTS;
-
                 let slots_offset = pos + SLOTS_OFFSET;
                 let chunks_offset = pos + SYS_CHUNKS_OFFSET;
 
@@ -140,7 +154,9 @@ fn parse_mfs(data: &[u8], base: usize, e: &fpt::FPTEntry) {
     let e0 = &mut sys_pages[0].chunks.first_entry().unwrap();
     let c0 = e0.get();
     let magic = u32::read_from_prefix(&c0.data).unwrap();
-    assert_eq!(magic, mfs::XXX_MAGIC);
+    println!("{magic:08x} == {:08x}", mfs::XXX_MAGIC);
+    // NOTE: fails on Lenovo X270 and ASRock Z170
+    // assert_eq!(magic, mfs::XXX_MAGIC);
 
     let sh = mfs::MFSSysHeader::read_from_prefix(&c0.data).unwrap();
     println!("{sh:#04x?}");
@@ -165,7 +181,7 @@ fn parse_mfs(data: &[u8], base: usize, e: &fpt::FPTEntry) {
         // println!("sys page @ 0x{o:08x} {h:04x?}")
     }
 
-    if false {
+    if true {
         println!("pages: {pages}");
         println!("  sys: {n_sys_pages}");
         println!("  data: {n_data_pages}");

@@ -44,6 +44,8 @@ fn parse_mfs(data: &[u8], base: usize, e: &fpt::FPTEntry) {
     let pages = s / mfs::MFS_PAGE_SIZE;
     let n_sys_pages = pages / 12;
     let n_data_pages = pages - n_sys_pages - 1;
+
+    let n_sys_chunks = n_sys_pages * mfs::MFS_SYS_PAGE_CHUNKS;
     let n_data_chunks = n_data_pages * mfs::MFS_DATA_PAGE_CHUNKS;
 
     let mut data_pages = Vec::<mfs::MFSDataPage>::new();
@@ -55,6 +57,8 @@ fn parse_mfs(data: &[u8], base: usize, e: &fpt::FPTEntry) {
     const SYS_CHUNKS_OFFSET: usize = SLOTS_OFFSET + 2 * mfs::MFS_SYS_PAGE_SLOTS;
     const DATA_CHUNKS_OFFSET: usize = SLOTS_OFFSET + 2 * mfs::MFS_DATA_PAGE_SLOTS;
 
+    let mut free_data_chunks = 0;
+    let mut free_sys_chunks = 0;
     for pos in (o..end).step_by(mfs::MFS_PAGE_SIZE) {
         let buf = &data[pos..pos + 4];
         let magic = u32::read_from_prefix(buf).unwrap();
@@ -76,6 +80,7 @@ fn parse_mfs(data: &[u8], base: usize, e: &fpt::FPTEntry) {
 
                     // free chunk
                     if s == 0xff {
+                        free_data_chunks += 1;
                         continue;
                     }
 
@@ -89,8 +94,6 @@ fn parse_mfs(data: &[u8], base: usize, e: &fpt::FPTEntry) {
                     chunks.insert(chunk_index, c);
                 }
 
-                let mut a_free = [0u8; mfs::MFS_DATA_PAGE_SLOTS];
-                a_free.copy_from_slice(&data[p..p + mfs::MFS_DATA_PAGE_SLOTS]);
                 let page = mfs::MFSDataPage {
                     offset: pos,
                     header,
@@ -110,6 +113,8 @@ fn parse_mfs(data: &[u8], base: usize, e: &fpt::FPTEntry) {
 
                     // Last chunk is marked
                     if s == mfs::MFS_SLOT_LAST {
+                        let remaining = mfs::MFS_SYS_PAGE_CHUNKS - chunk_pos;
+                        free_sys_chunks += remaining;
                         break;
                     }
 
@@ -162,20 +167,41 @@ fn parse_mfs(data: &[u8], base: usize, e: &fpt::FPTEntry) {
 
     let mut data = Vec::<u8>::new();
     for p in sys_pages {
-        for c in p.chunks {
-            let d = c.1.data;
-            data.extend_from_slice(&d);
+        for (_, c) in p.chunks {
+            data.extend_from_slice(&c.data);
         }
     }
+    let used_sys_bytes = data.len();
     for p in data_pages {
-        for c in p.chunks {
-            let d = c.1.data;
-            data.extend_from_slice(&d);
+        for (_, c) in p.chunks {
+            data.extend_from_slice(&c.data);
         }
     }
+    let used_bytes = data.len();
+    let used_data_bytes = used_bytes - used_sys_bytes;
 
-    let l = data.len();
-    println!("{l:08x}");
+    let free_data_bytes = free_data_chunks * mfs::MFS_CHUNK_DATA_SIZE;
+    let free_sys_bytes = free_sys_chunks * mfs::MFS_CHUNK_DATA_SIZE;
+    let free_bytes = free_sys_bytes + free_data_bytes;
+
+    let data_bytes = used_data_bytes + free_data_bytes;
+    let sys_bytes = used_sys_bytes + free_sys_bytes;
+
+    println!();
+    println!(" system bytes used 0x{used_sys_bytes:08x}");
+    println!("   data bytes used 0x{used_data_bytes:08x}");
+    println!("  total bytes used 0x{used_bytes:08x}");
+    println!();
+    println!(" system bytes free 0x{free_sys_bytes:08x}");
+    println!("   data bytes free 0x{free_data_bytes:08x}");
+    println!("  total bytes free 0x{free_bytes:08x}");
+    println!();
+
+    println!("  total data bytes 0x{data_bytes:08x}");
+    println!(" total sytem bytes 0x{sys_bytes:08x}");
+    println!("       total bytes 0x{:08x}", used_bytes + free_bytes);
+    println!("     expected      0x{:08x}", sh.chunk_bytes_total);
+    println!();
 
     // let total_files_and_chunks = sh.files;
     let total_files_and_chunks = 20;
@@ -205,6 +231,11 @@ fn parse_mfs(data: &[u8], base: usize, e: &fpt::FPTEntry) {
         println!("  data: {n_data_pages}");
         println!("  blank at 0x{blank_page:08x}");
         println!("data chunks: {n_data_chunks}");
+        let data_bytes = n_data_chunks * mfs::MFS_CHUNK_DATA_SIZE;
+        println!("  data bytes: {data_bytes:08x}");
+        let sys_bytes = n_sys_chunks * mfs::MFS_CHUNK_DATA_SIZE;
+        println!("system bytes: {sys_bytes:08x}");
+        println!(" total bytes: {:08x}", data_bytes + sys_bytes);
     }
 }
 

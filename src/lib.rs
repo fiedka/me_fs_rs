@@ -71,12 +71,15 @@ fn parse_mfs(data: &[u8], base: usize, e: &fpt::FPTEntry) {
                 let mut chunks = mfs::Chunks::new();
 
                 for chunk_pos in 0..mfs::MFS_DATA_PAGE_SLOTS {
-                    let o = slots_offset + 2 * chunk_pos;
-                    let s = u16::read_from_prefix(&data[o..]).unwrap();
-                    if s == mfs::MFS_SLOT_LAST {
-                        break;
+                    let o = slots_offset + chunk_pos;
+                    let s = u8::read_from_prefix(&data[o..]).unwrap();
+
+                    // free chunk
+                    if s == 0xff {
+                        continue;
                     }
-                    let chunk_index = header.first_chunk + s;
+
+                    let chunk_index = header.first_chunk + chunk_pos as u16;
 
                     // Parse the chunk
                     let coff = chunks_offset + chunk_pos * mfs::MFS_CHUNK_SIZE;
@@ -91,7 +94,7 @@ fn parse_mfs(data: &[u8], base: usize, e: &fpt::FPTEntry) {
                 let page = mfs::MFSDataPage {
                     offset: pos,
                     header,
-                    a_free,
+                    chunks,
                 };
                 data_pages.push(page);
             } else {
@@ -105,8 +108,8 @@ fn parse_mfs(data: &[u8], base: usize, e: &fpt::FPTEntry) {
                     let o = slots_offset + 2 * chunk_pos;
                     let s = u16::read_from_prefix(&data[o..]).unwrap();
 
-                    // Unmapped chunk
-                    if s & 0xc000 != 0 {
+                    // Last chunk is marked
+                    if s == mfs::MFS_SLOT_LAST {
                         break;
                     }
 
@@ -144,14 +147,10 @@ fn parse_mfs(data: &[u8], base: usize, e: &fpt::FPTEntry) {
     }
     // sort by Update Sequence Number
     data_pages.sort_by_key(|p| p.header.first_chunk);
-    for p in data_pages {
-        let o = p.offset;
-        let f = p.header.first_chunk;
-        // println!("data page @ 0x{o:08x}; first chunk: {f}")
-    }
     sys_pages.sort_by_key(|p| p.header.usn);
 
-    let e0 = &mut sys_pages[0].chunks.first_entry().unwrap();
+    let ps = &mut sys_pages.clone();
+    let e0 = ps[0].chunks.first_entry().unwrap();
     let c0 = e0.get();
     let magic = u32::read_from_prefix(&c0.data).unwrap();
     println!("{magic:08x} == {:08x}", mfs::XXX_MAGIC);
@@ -160,6 +159,23 @@ fn parse_mfs(data: &[u8], base: usize, e: &fpt::FPTEntry) {
 
     let sh = mfs::MFSSysHeader::read_from_prefix(&c0.data).unwrap();
     println!("{sh:#04x?}");
+
+    let mut data = Vec::<u8>::new();
+    for p in sys_pages {
+        for c in p.chunks {
+            let d = c.1.data;
+            data.extend_from_slice(&d);
+        }
+    }
+    for p in data_pages {
+        for c in p.chunks {
+            let d = c.1.data;
+            data.extend_from_slice(&d);
+        }
+    }
+
+    let l = data.len();
+    println!("{l:08x}");
 
     // let total_files_and_chunks = sh.files;
     let total_files_and_chunks = 20;
@@ -175,11 +191,13 @@ fn parse_mfs(data: &[u8], base: usize, e: &fpt::FPTEntry) {
     }
     println!();
 
+    /*
     for p in sys_pages {
         let o = p.offset;
         let h = p.header;
         // println!("sys page @ 0x{o:08x} {h:04x?}")
     }
+    */
 
     if true {
         println!("pages: {pages}");

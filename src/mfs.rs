@@ -39,13 +39,12 @@ pub struct MFSSysPage {
     pub chunks: Chunks,
 }
 
-#[derive(FromBytes, FromZeroes, Serialize, Deserialize, Clone, Copy, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[repr(C)]
 pub struct MFSDataPage {
     pub offset: usize,
     pub header: MFSPageHeader,
-    #[serde(with = "BigArray")]
-    pub a_free: [u8; MFS_DATA_PAGE_SLOTS],
+    pub chunks: Chunks,
 }
 
 // XXX: this yields 20... why?

@@ -7,31 +7,32 @@ use zerocopy_derive::{FromBytes, FromZeroes};
 // see https://live.ructf.org/intel_me.pdf slide 35
 const PAGE_MAGIC: u32 = 0xaa55_7887;
 
-pub const PAGE_SIZE: usize = 0x2000;
-// XXX: this yields 20... why?
-pub const PAGE_HEADER_SIZE: usize = std::mem::size_of::<PageHeader>();
+const PAGE_SIZE: usize = 0x2000;
 
-// NOTE: We cannot use PAGE_HEADER_SIZE here because it is larger than the
-// underlying data.
+// NOTE: We cannot use std::mem::size_of::<PageHeader>() here because it is
+// larger than the underlying data.
 const SLOTS_OFFSET: usize = 18;
 // NOTE: System and data pages have different chunk counts and different slot sizes!
 const SYS_CHUNKS_OFFSET: usize = SLOTS_OFFSET + 2 * SYS_PAGE_SLOTS;
 const DATA_CHUNKS_OFFSET: usize = SLOTS_OFFSET + DATA_PAGE_SLOTS;
 
-pub const CHUNK_DATA_SIZE: usize = 0x40;
+const CHUNK_DATA_SIZE: usize = 0x40;
 // + 2 bytes checksum
-pub const CHUNK_SIZE: usize = CHUNK_DATA_SIZE + 2;
+const CHUNK_SIZE: usize = CHUNK_DATA_SIZE + 2;
 
-pub const SYS_PAGE_CHUNKS: usize = 120;
-pub const SYS_PAGE_SLOTS: usize = SYS_PAGE_CHUNKS + 1;
+const SYS_PAGE_CHUNKS: usize = 120;
+const SYS_PAGE_SLOTS: usize = SYS_PAGE_CHUNKS + 1;
 
-pub const DATA_PAGE_CHUNKS: usize = 122;
-pub const DATA_PAGE_SLOTS: usize = DATA_PAGE_CHUNKS;
+const DATA_PAGE_CHUNKS: usize = 122;
+const DATA_PAGE_SLOTS: usize = DATA_PAGE_CHUNKS;
 
-pub const SLOT_UNUSED: u16 = 0xffff;
-pub const SLOT_LAST: u16 = 0x7fff;
+const SLOT_UNUSED: u16 = 0xffff;
+const SLOT_LAST: u16 = 0x7fff;
 
-pub const VOL_MAGIC: u32 = 0x724F_6201;
+const VOL_MAGIC: u32 = 0x724F_6201;
+// NOTE: We cannot use std::mem::size_of::<VolHeader>() here because it is
+// larger than the underlying data.
+const VOL_HEADER_SIZE: usize = 14;
 
 #[derive(FromBytes, FromZeroes, Serialize, Deserialize, Clone, Copy, Debug)]
 #[repr(C)]
@@ -153,6 +154,7 @@ fn parse_data_chunks(data: &[u8], first_chunk: u16) -> (Chunks, usize) {
     (chunks, free_chunks)
 }
 
+const DEBUG_FAT: bool = true;
 const VERBOSE: bool = false;
 
 fn parse_sys_chunks(data: &[u8]) -> (Chunks, usize, usize) {
@@ -200,6 +202,41 @@ fn parse_sys_chunks(data: &[u8]) -> (Chunks, usize, usize) {
         chunks.insert(chunk_index, c);
     }
     (chunks, free_chunks, dup_chunks)
+}
+
+fn get_file<'a>(
+    chunks: &Chunks,
+    n_sys_chunks: u16,
+    fat: &[u16],
+    n_files: u16,
+    file_index: usize,
+) -> Result<Vec<u8>, &'a str> {
+    let mut i_node = fat[file_index];
+    println!("  chunks: {}, fat size: {}", chunks.len(), fat.len());
+    println!("  file {file_index:04} iNode {i_node:04x}");
+    if i_node == 0xffff {
+        return Err("empty file");
+    }
+    if i_node == 0x0000 {
+        return Err("no file");
+    }
+
+    let mut data = Vec::<u8>::new();
+    loop {
+        assert!(i_node >= n_files);
+        let ci = i_node + n_sys_chunks - n_files;
+        let c = chunks[&ci];
+        i_node = fat[i_node as usize];
+        println!("  next {i_node}");
+        // For the last chunk, i_node is the number of remaining bytes
+        if i_node > 0 && i_node as usize <= CHUNK_SIZE {
+            data.extend_from_slice(&c.data[..i_node as usize]);
+            break;
+        }
+        data.extend_from_slice(&c.data);
+        // println!("{data:02x?}");
+    }
+    Ok(data)
 }
 
 pub fn parse(data: &[u8]) {
@@ -273,7 +310,6 @@ pub fn parse(data: &[u8]) {
     for p in sys_pages {
         for (i, c) in p.chunks {
             assert!(i < n_sys_chunks);
-            data.extend_from_slice(&c.data);
             if chunks.contains_key(&i) {
                 dup_sys_chunks += 1;
             } else {
@@ -282,6 +318,10 @@ pub fn parse(data: &[u8]) {
             chunks.insert(i, c);
         }
     }
+    for (_, c) in &chunks {
+        data.extend_from_slice(&c.data);
+    }
+
     // real_n_sys_chunks += dup_sys_chunks;
     let used_sys_bytes = data.len() + dup_sys_chunks * CHUNK_SIZE;
 
@@ -327,19 +367,30 @@ pub fn parse(data: &[u8]) {
     println!("     expected      0x{:06x}", vh.chunk_bytes_total);
     println!();
 
-    // let total_files_and_chunks = sh.files;
-    let total_files_and_chunks = 20;
+    let total_files_and_chunks = vh.files as usize + n_data_chunks;
+    println!("total files and chunks: {total_files_and_chunks}");
     let mut fat = Vec::<u16>::new();
-    for i in 0..total_files_and_chunks as usize {
-        let f = u16::read_from_prefix(&data[14 + i * 2..]).unwrap();
+    let d = &data[VOL_HEADER_SIZE..VOL_HEADER_SIZE + total_files_and_chunks * 2];
+    // two bytes each
+    for p in (0..total_files_and_chunks).step_by(2) {
+        let f = u16::read_from(&d[p..p + 2]).unwrap();
         fat.push(f);
     }
 
-    if false {
+    if DEBUG_FAT {
         println!();
         println!("FAT");
-        for f in fat.iter().take(10) {
-            print!(" {f:04x?}");
+        for (i, f) in fat.iter().enumerate() {
+            if i == vh.files as usize {
+                println!();
+            }
+            if i % 64 == 0 {
+                println!();
+            }
+            if i % 16 == 0 {
+                print!("\n{i:04x}: ");
+            }
+            print!("{f:04x} ");
         }
         println!();
         println!();
@@ -363,5 +414,11 @@ pub fn parse(data: &[u8]) {
         println!(" system bytes: 0x{sys_bytes:06x}");
         println!("   data bytes: 0x{data_bytes:06x}");
         println!("  total bytes: 0x{:06x}", data_bytes + sys_bytes);
+    }
+
+    let file_index = 0x6;
+    if let Ok(f) = get_file(&chunks, n_sys_chunks, &fat, vh.files, file_index) {
+        println!("  file {file_index:04} size: {}", f.len());
+        // println!("{f:02x?}");
     }
 }

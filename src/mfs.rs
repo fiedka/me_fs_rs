@@ -1,56 +1,15 @@
 use serde::{Deserialize, Serialize};
 use serde_big_array::BigArray;
+use std::collections::BTreeMap;
 use zerocopy::FromBytes;
 use zerocopy_derive::{FromBytes, FromZeroes};
 
 // see https://live.ructf.org/intel_me.pdf slide 35
 const PAGE_MAGIC: u32 = 0xaa55_7887;
 
-#[derive(FromBytes, FromZeroes, Serialize, Deserialize, Clone, Copy, Debug)]
-#[repr(C)]
-pub struct MFSPageHeader {
-    pub magic: [u8; 4],
-    // update sequence number
-    pub usn: u32,
-    pub n_erase: u32,
-    pub i_next_erase: u16,
-    pub first_chunk: u16, // first chunk index, for data
-    pub checksum: u8,
-    pub b0: u8, // always 0
-}
-
-use std::collections::BTreeMap;
-
-#[derive(FromBytes, FromZeroes, Serialize, Deserialize, Clone, Copy, Debug)]
-#[repr(C)]
-pub struct MFSSysHeader {
-    pub magic: [u8; 4],
-    pub version: u32,
-    pub chunk_bytes_total: u32,
-    pub files: u16,
-}
-
-pub type Chunks = BTreeMap<u16, MFSChunk>;
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-#[repr(C)]
-pub struct MFSSysPage {
-    pub offset: usize,
-    pub header: MFSPageHeader,
-    pub chunks: Chunks,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-#[repr(C)]
-pub struct MFSDataPage {
-    pub offset: usize,
-    pub header: MFSPageHeader,
-    pub chunks: Chunks,
-}
-
 pub const PAGE_SIZE: usize = 0x2000;
 // XXX: this yields 20... why?
-pub const PAGE_HEADER_SIZE: usize = std::mem::size_of::<MFSPageHeader>();
+pub const PAGE_HEADER_SIZE: usize = std::mem::size_of::<PageHeader>();
 
 // NOTE: We cannot use PAGE_HEADER_SIZE here because it is larger than the
 // underlying data.
@@ -76,10 +35,50 @@ pub const FS_START_MAGIC: u32 = 0x724F_6201;
 
 #[derive(FromBytes, FromZeroes, Serialize, Deserialize, Clone, Copy, Debug)]
 #[repr(C)]
-pub struct MFSChunk {
+pub struct PageHeader {
+    pub magic: [u8; 4],
+    // update sequence number
+    pub usn: u32,
+    pub n_erase: u32,
+    pub i_next_erase: u16,
+    pub first_chunk: u16, // first chunk index, for data
+    pub checksum: u8,
+    pub b0: u8, // always 0
+}
+
+#[derive(FromBytes, FromZeroes, Serialize, Deserialize, Clone, Copy, Debug)]
+#[repr(C)]
+pub struct Chunk {
     #[serde(with = "BigArray")]
     pub data: [u8; CHUNK_DATA_SIZE],
     pub crc16: u16,
+}
+
+pub type Chunks = BTreeMap<u16, Chunk>;
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[repr(C)]
+pub struct SysPage {
+    pub offset: usize,
+    pub header: PageHeader,
+    pub chunks: Chunks,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[repr(C)]
+pub struct DataPage {
+    pub offset: usize,
+    pub header: PageHeader,
+    pub chunks: Chunks,
+}
+
+#[derive(FromBytes, FromZeroes, Serialize, Deserialize, Clone, Copy, Debug)]
+#[repr(C)]
+pub struct VolHeader {
+    pub magic: [u8; 4],
+    pub version: u32,
+    pub chunk_bytes_total: u32,
+    pub files: u16,
 }
 
 /*
@@ -167,7 +166,7 @@ fn parse_data_chunks(data: &[u8], first_chunk: u16) -> (Chunks, usize) {
         // Parse the chunk
         let coff = DATA_CHUNKS_OFFSET + chunk_pos * CHUNK_SIZE;
         let cbuf = &data[coff..coff + CHUNK_SIZE];
-        let c = MFSChunk::read_from_prefix(cbuf).unwrap();
+        let c = Chunk::read_from_prefix(cbuf).unwrap();
 
         chunks.insert(chunk_index, c);
     }
@@ -197,7 +196,7 @@ fn parse_sys_chunks(data: &[u8]) -> (Chunks, usize) {
         // Parse the chunk
         let coff = SYS_CHUNKS_OFFSET + chunk_pos * CHUNK_SIZE;
         let cbuf = &data[coff..coff + CHUNK_SIZE];
-        let c = MFSChunk::read_from_prefix(cbuf).unwrap();
+        let c = Chunk::read_from_prefix(cbuf).unwrap();
 
         // Calculate chunk index
         chunk_index = crc_idx(chunk_index) ^ s;
@@ -226,8 +225,8 @@ pub fn parse(data: &[u8], base: usize, e: &crate::fpt::FPTEntry) {
     let n_sys_chunks = n_sys_pages * SYS_PAGE_CHUNKS;
     let n_data_chunks = n_data_pages * DATA_PAGE_CHUNKS;
 
-    let mut data_pages = Vec::<MFSDataPage>::new();
-    let mut sys_pages = Vec::<MFSSysPage>::new();
+    let mut data_pages = Vec::<DataPage>::new();
+    let mut sys_pages = Vec::<SysPage>::new();
     let mut blank_page = 0;
 
     let mut free_data_chunks = 0;
@@ -236,13 +235,13 @@ pub fn parse(data: &[u8], base: usize, e: &crate::fpt::FPTEntry) {
         let magic = u32::read_from_prefix(&data[pos..pos + 4]).unwrap();
         if magic == PAGE_MAGIC {
             let c = &data[pos..pos + PAGE_HEADER_SIZE];
-            let header = MFSPageHeader::read_from_prefix(c).unwrap();
+            let header = PageHeader::read_from_prefix(c).unwrap();
 
             let is_data = header.first_chunk > 0;
             if is_data {
                 let (chunks, free_chunks) = parse_data_chunks(&data[pos..], header.first_chunk);
                 free_data_chunks += free_chunks;
-                data_pages.push(MFSDataPage {
+                data_pages.push(DataPage {
                     offset: pos,
                     header,
                     chunks,
@@ -250,7 +249,7 @@ pub fn parse(data: &[u8], base: usize, e: &crate::fpt::FPTEntry) {
             } else {
                 let (chunks, free_chunks) = parse_sys_chunks(&data[pos..]);
                 free_sys_chunks += free_chunks;
-                sys_pages.push(MFSSysPage {
+                sys_pages.push(SysPage {
                     offset: pos,
                     header,
                     chunks,
@@ -295,9 +294,9 @@ pub fn parse(data: &[u8], base: usize, e: &crate::fpt::FPTEntry) {
     let magic = u32::read_from_prefix(&data).unwrap();
     println!("{magic:08x} == {:08x}", FS_START_MAGIC);
     // NOTE: fails on Lenovo X270 and ASRock Z170
-    // assert_eq!(magic, XXX_MAGIC);
-    let sh = MFSSysHeader::read_from_prefix(&data).unwrap();
-    println!("{sh:#04x?}");
+    // assert_eq!(magic, FS_START_MAGIC);
+    let vh = VolHeader::read_from_prefix(&data).unwrap();
+    println!("{vh:#04x?}");
 
     println!();
     println!(" system bytes used 0x{used_sys_bytes:06x}");
@@ -312,7 +311,7 @@ pub fn parse(data: &[u8], base: usize, e: &crate::fpt::FPTEntry) {
     println!("  total data bytes 0x{data_bytes:06x}");
     println!(" total sytem bytes 0x{sys_bytes:06x}");
     println!("       total bytes 0x{:06x}", used_bytes + free_bytes);
-    println!("     expected      0x{:06x}", sh.chunk_bytes_total);
+    println!("     expected      0x{:06x}", vh.chunk_bytes_total);
     println!();
 
     // let total_files_and_chunks = sh.files;

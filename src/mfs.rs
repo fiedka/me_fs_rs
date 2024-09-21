@@ -55,8 +55,9 @@ pub const PAGE_HEADER_SIZE: usize = std::mem::size_of::<MFSPageHeader>();
 // NOTE: We cannot use PAGE_HEADER_SIZE here because it is larger than the
 // underlying data.
 const SLOTS_OFFSET: usize = 18;
+// NOTE: System and data pages have different chunk counts and different slot sizes!
 const SYS_CHUNKS_OFFSET: usize = SLOTS_OFFSET + 2 * SYS_PAGE_SLOTS;
-const DATA_CHUNKS_OFFSET: usize = SLOTS_OFFSET + 2 * DATA_PAGE_SLOTS;
+const DATA_CHUNKS_OFFSET: usize = SLOTS_OFFSET + DATA_PAGE_SLOTS;
 
 pub const CHUNK_DATA_SIZE: usize = 0x40;
 // + 2 bytes checksum
@@ -182,6 +183,10 @@ fn parse_sys_chunks(data: &[u8]) -> (Chunks, usize) {
         let o = SLOTS_OFFSET + 2 * chunk_pos;
         let s = u16::read_from_prefix(&data[o..]).unwrap();
 
+        if s == SLOT_UNUSED {
+            free_chunks += 1;
+            continue;
+        }
         // Last chunk is marked
         if s == SLOT_LAST {
             let remaining = SYS_PAGE_CHUNKS - chunk_pos;
@@ -295,19 +300,19 @@ pub fn parse(data: &[u8], base: usize, e: &crate::fpt::FPTEntry) {
     println!("{sh:#04x?}");
 
     println!();
-    println!(" system bytes used 0x{used_sys_bytes:08x}");
-    println!("   data bytes used 0x{used_data_bytes:08x}");
-    println!("  total bytes used 0x{used_bytes:08x}");
+    println!(" system bytes used 0x{used_sys_bytes:06x}");
+    println!("   data bytes used 0x{used_data_bytes:06x}");
+    println!("  total bytes used 0x{used_bytes:06x}");
     println!();
-    println!(" system bytes free 0x{free_sys_bytes:08x}");
-    println!("   data bytes free 0x{free_data_bytes:08x}");
-    println!("  total bytes free 0x{free_bytes:08x}");
+    println!(" system bytes free 0x{free_sys_bytes:06x}");
+    println!("   data bytes free 0x{free_data_bytes:06x}");
+    println!("  total bytes free 0x{free_bytes:06x}");
     println!();
 
-    println!("  total data bytes 0x{data_bytes:08x}");
-    println!(" total sytem bytes 0x{sys_bytes:08x}");
-    println!("       total bytes 0x{:08x}", used_bytes + free_bytes);
-    println!("     expected      0x{:08x}", sh.chunk_bytes_total);
+    println!("  total data bytes 0x{data_bytes:06x}");
+    println!(" total sytem bytes 0x{sys_bytes:06x}");
+    println!("       total bytes 0x{:06x}", used_bytes + free_bytes);
+    println!("     expected      0x{:06x}", sh.chunk_bytes_total);
     println!();
 
     // let total_files_and_chunks = sh.files;
@@ -338,8 +343,8 @@ pub fn parse(data: &[u8], base: usize, e: &crate::fpt::FPTEntry) {
         println!("\nbytes:");
         let data_bytes = n_data_chunks * CHUNK_DATA_SIZE;
         let sys_bytes = n_sys_chunks * CHUNK_DATA_SIZE;
-        println!("   data bytes: 0x{data_bytes:08x}");
-        println!(" system bytes: 0x{sys_bytes:08x}");
-        println!("  total bytes: 0{:08x}", data_bytes + sys_bytes);
+        println!("   data bytes: 0x{data_bytes:06x}");
+        println!(" system bytes: 0x{sys_bytes:06x}");
+        println!("  total bytes: 0x{:06x}", data_bytes + sys_bytes);
     }
 }

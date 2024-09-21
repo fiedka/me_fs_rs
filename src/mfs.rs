@@ -31,7 +31,7 @@ pub const DATA_PAGE_SLOTS: usize = DATA_PAGE_CHUNKS;
 pub const SLOT_UNUSED: u16 = 0xffff;
 pub const SLOT_LAST: u16 = 0x7fff;
 
-pub const FS_START_MAGIC: u32 = 0x724F_6201;
+pub const VOL_MAGIC: u32 = 0x724F_6201;
 
 #[derive(FromBytes, FromZeroes, Serialize, Deserialize, Clone, Copy, Debug)]
 #[repr(C)]
@@ -250,7 +250,9 @@ pub fn parse(data: &[u8]) {
     let mut sp0 = sys_pages.first().unwrap().clone();
     let sc0 = sp0.chunks.first_entry().unwrap();
     let magic = u32::read_from_prefix(&sc0.get().data).unwrap();
-    println!("{magic:08x} == {:08x}", FS_START_MAGIC);
+    println!("{magic:08x} == {:08x}", VOL_MAGIC);
+    // NOTE: fails on Lenovo X270 and ASRock Z170
+    // assert_eq!(magic, VOL_MAGIC);
 
     for p in sys_pages {
         if false {
@@ -285,8 +287,6 @@ pub fn parse(data: &[u8]) {
     let data_bytes = used_data_bytes + free_data_bytes;
     let sys_bytes = used_sys_bytes + free_sys_bytes;
 
-    // NOTE: fails on Lenovo X270 and ASRock Z170
-    // assert_eq!(magic, FS_START_MAGIC);
     let vh = VolHeader::read_from_prefix(&data).unwrap();
     println!("{vh:#04x?}");
 

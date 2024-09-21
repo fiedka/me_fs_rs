@@ -1,3 +1,6 @@
+use std::fs::File;
+use std::io::prelude::*;
+
 use serde::{Deserialize, Serialize};
 use serde_big_array::BigArray;
 use std::collections::BTreeMap;
@@ -423,6 +426,8 @@ pub fn parse(data: &[u8]) {
     let file_index = 0x6;
     if let Ok(f) = get_file(&chunks, n_sys_chunks, &fat, vh.files, file_index) {
         println!("  file {file_index:04} size: {}", f.len());
+        let mut file = File::create("intel.cfg").unwrap();
+        file.write_all(&f).unwrap();
         // println!("{f:02x?}");
     }
 }

@@ -48,28 +48,28 @@ pub struct MFSDataPage {
     pub chunks: Chunks,
 }
 
+pub const PAGE_SIZE: usize = 0x2000;
 // XXX: this yields 20... why?
-pub const MFS_PAGE_HEADER_SIZE: usize = std::mem::size_of::<MFSPageHeader>();
+pub const PAGE_HEADER_SIZE: usize = std::mem::size_of::<MFSPageHeader>();
 
-pub const MFS_PAGE_SIZE: usize = 0x2000;
-pub const MFS_CHUNK_DATA_SIZE: usize = 0x40;
-// + 2 bytes checksum
-pub const MFS_CHUNK_SIZE: usize = MFS_CHUNK_DATA_SIZE + 2;
-
-pub const MFS_SYS_PAGE_CHUNKS: usize = 120;
-pub const MFS_SYS_PAGE_SLOTS: usize = MFS_SYS_PAGE_CHUNKS + 1;
-
-pub const MFS_DATA_PAGE_CHUNKS: usize = 122;
-pub const MFS_DATA_PAGE_SLOTS: usize = MFS_DATA_PAGE_CHUNKS;
-
-pub const MFS_SLOT_UNUSED: u16 = 0xffff;
-pub const MFS_SLOT_LAST: u16 = 0x7fff;
-
-// NOTE: We cannot use MFS_PAGE_HEADER_SIZE here because it is larger than the
+// NOTE: We cannot use PAGE_HEADER_SIZE here because it is larger than the
 // underlying data.
 const SLOTS_OFFSET: usize = 18;
-const SYS_CHUNKS_OFFSET: usize = SLOTS_OFFSET + 2 * MFS_SYS_PAGE_SLOTS;
-const DATA_CHUNKS_OFFSET: usize = SLOTS_OFFSET + 2 * MFS_DATA_PAGE_SLOTS;
+const SYS_CHUNKS_OFFSET: usize = SLOTS_OFFSET + 2 * SYS_PAGE_SLOTS;
+const DATA_CHUNKS_OFFSET: usize = SLOTS_OFFSET + 2 * DATA_PAGE_SLOTS;
+
+pub const CHUNK_DATA_SIZE: usize = 0x40;
+// + 2 bytes checksum
+pub const CHUNK_SIZE: usize = CHUNK_DATA_SIZE + 2;
+
+pub const SYS_PAGE_CHUNKS: usize = 120;
+pub const SYS_PAGE_SLOTS: usize = SYS_PAGE_CHUNKS + 1;
+
+pub const DATA_PAGE_CHUNKS: usize = 122;
+pub const DATA_PAGE_SLOTS: usize = DATA_PAGE_CHUNKS;
+
+pub const SLOT_UNUSED: u16 = 0xffff;
+pub const SLOT_LAST: u16 = 0x7fff;
 
 pub const FS_START_MAGIC: u32 = 0x724F_6201;
 
@@ -77,7 +77,7 @@ pub const FS_START_MAGIC: u32 = 0x724F_6201;
 #[repr(C)]
 pub struct MFSChunk {
     #[serde(with = "BigArray")]
-    pub data: [u8; MFS_CHUNK_DATA_SIZE],
+    pub data: [u8; CHUNK_DATA_SIZE],
     pub crc16: u16,
 }
 
@@ -151,7 +151,7 @@ fn parse_data_chunks(data: &[u8], first_chunk: u16) -> (Chunks, usize) {
     let mut free_chunks = 0;
     let mut chunks = Chunks::new();
 
-    for chunk_pos in 0..MFS_DATA_PAGE_SLOTS {
+    for chunk_pos in 0..DATA_PAGE_SLOTS {
         let o = SLOTS_OFFSET + chunk_pos;
         let s = u8::read_from_prefix(&data[o..]).unwrap();
 
@@ -164,8 +164,8 @@ fn parse_data_chunks(data: &[u8], first_chunk: u16) -> (Chunks, usize) {
         let chunk_index = first_chunk + chunk_pos as u16;
 
         // Parse the chunk
-        let coff = DATA_CHUNKS_OFFSET + chunk_pos * MFS_CHUNK_SIZE;
-        let cbuf = &data[coff..coff + MFS_CHUNK_SIZE];
+        let coff = DATA_CHUNKS_OFFSET + chunk_pos * CHUNK_SIZE;
+        let cbuf = &data[coff..coff + CHUNK_SIZE];
         let c = MFSChunk::read_from_prefix(cbuf).unwrap();
 
         chunks.insert(chunk_index, c);
@@ -178,20 +178,20 @@ fn parse_sys_chunks(data: &[u8]) -> (Chunks, usize) {
     let mut chunks = Chunks::new();
     let mut chunk_index = 0;
 
-    for chunk_pos in 0..MFS_SYS_PAGE_SLOTS {
+    for chunk_pos in 0..SYS_PAGE_SLOTS {
         let o = SLOTS_OFFSET + 2 * chunk_pos;
         let s = u16::read_from_prefix(&data[o..]).unwrap();
 
         // Last chunk is marked
-        if s == MFS_SLOT_LAST {
-            let remaining = MFS_SYS_PAGE_CHUNKS - chunk_pos;
+        if s == SLOT_LAST {
+            let remaining = SYS_PAGE_CHUNKS - chunk_pos;
             free_chunks += remaining;
             break;
         }
 
         // Parse the chunk
-        let coff = SYS_CHUNKS_OFFSET + chunk_pos * MFS_CHUNK_SIZE;
-        let cbuf = &data[coff..coff + MFS_CHUNK_SIZE];
+        let coff = SYS_CHUNKS_OFFSET + chunk_pos * CHUNK_SIZE;
+        let cbuf = &data[coff..coff + CHUNK_SIZE];
         let c = MFSChunk::read_from_prefix(cbuf).unwrap();
 
         // Calculate chunk index
@@ -214,12 +214,12 @@ pub fn parse(data: &[u8], base: usize, e: &crate::fpt::FPTEntry) {
     let o = base + e.offset as usize;
     let s = e.size as usize;
     let end = o + s;
-    let n_pages = s / MFS_PAGE_SIZE;
+    let n_pages = s / PAGE_SIZE;
     let n_sys_pages = n_pages / 12;
     let n_data_pages = n_pages - n_sys_pages - 1;
 
-    let n_sys_chunks = n_sys_pages * MFS_SYS_PAGE_CHUNKS;
-    let n_data_chunks = n_data_pages * MFS_DATA_PAGE_CHUNKS;
+    let n_sys_chunks = n_sys_pages * SYS_PAGE_CHUNKS;
+    let n_data_chunks = n_data_pages * DATA_PAGE_CHUNKS;
 
     let mut data_pages = Vec::<MFSDataPage>::new();
     let mut sys_pages = Vec::<MFSSysPage>::new();
@@ -227,10 +227,10 @@ pub fn parse(data: &[u8], base: usize, e: &crate::fpt::FPTEntry) {
 
     let mut free_data_chunks = 0;
     let mut free_sys_chunks = 0;
-    for pos in (o..end).step_by(MFS_PAGE_SIZE) {
+    for pos in (o..end).step_by(PAGE_SIZE) {
         let magic = u32::read_from_prefix(&data[pos..pos + 4]).unwrap();
         if magic == PAGE_MAGIC {
-            let c = &data[pos..pos + MFS_PAGE_HEADER_SIZE];
+            let c = &data[pos..pos + PAGE_HEADER_SIZE];
             let header = MFSPageHeader::read_from_prefix(c).unwrap();
 
             let is_data = header.first_chunk > 0;
@@ -279,8 +279,8 @@ pub fn parse(data: &[u8], base: usize, e: &crate::fpt::FPTEntry) {
     let used_bytes = data.len();
     let used_data_bytes = used_bytes - used_sys_bytes;
 
-    let free_data_bytes = free_data_chunks * MFS_CHUNK_DATA_SIZE;
-    let free_sys_bytes = free_sys_chunks * MFS_CHUNK_DATA_SIZE;
+    let free_data_bytes = free_data_chunks * CHUNK_DATA_SIZE;
+    let free_sys_bytes = free_sys_chunks * CHUNK_DATA_SIZE;
     let free_bytes = free_sys_bytes + free_data_bytes;
 
     let data_bytes = used_data_bytes + free_data_bytes;
@@ -336,8 +336,8 @@ pub fn parse(data: &[u8], base: usize, e: &crate::fpt::FPTEntry) {
         println!("data chunks: {n_data_chunks}");
 
         println!("\nbytes:");
-        let data_bytes = n_data_chunks * MFS_CHUNK_DATA_SIZE;
-        let sys_bytes = n_sys_chunks * MFS_CHUNK_DATA_SIZE;
+        let data_bytes = n_data_chunks * CHUNK_DATA_SIZE;
+        let sys_bytes = n_sys_chunks * CHUNK_DATA_SIZE;
         println!("   data bytes: 0x{data_bytes:08x}");
         println!(" system bytes: 0x{sys_bytes:08x}");
         println!("  total bytes: 0{:08x}", data_bytes + sys_bytes);

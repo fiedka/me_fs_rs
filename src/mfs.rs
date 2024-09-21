@@ -153,13 +153,17 @@ fn parse_data_chunks(data: &[u8], first_chunk: u16) -> (Chunks, usize) {
     (chunks, free_chunks)
 }
 
-fn parse_sys_chunks(data: &[u8]) -> (Chunks, usize) {
+const VERBOSE: bool = false;
+
+fn parse_sys_chunks(data: &[u8]) -> (Chunks, usize, usize) {
+    let mut dup_chunks = 0;
     let mut free_chunks = 0;
     let mut chunks = Chunks::new();
     let mut chunk_index = 0;
 
     for chunk_pos in 0..SYS_PAGE_SLOTS {
         let o = SLOTS_OFFSET + 2 * chunk_pos;
+        // aka axIdx in PT code
         let slot = u16::read_from_prefix(&data[o..]).unwrap();
 
         if slot == SLOT_UNUSED {
@@ -168,7 +172,7 @@ fn parse_sys_chunks(data: &[u8]) -> (Chunks, usize) {
         }
         // Last chunk is marked
         if slot == SLOT_LAST {
-            let remaining = SYS_PAGE_CHUNKS - chunk_pos - 1;
+            let remaining = SYS_PAGE_CHUNKS - chunk_pos;
             free_chunks += remaining;
             break;
         }
@@ -180,18 +184,22 @@ fn parse_sys_chunks(data: &[u8]) -> (Chunks, usize) {
 
         // Calculate chunk index
         chunk_index = crc_idx(chunk_index) ^ slot;
-        let il = chunk_index as u8;
-        let ih = (chunk_index >> 8) as u8;
-
         // Calculate chunk checksum
         let mut dd = c.data.clone().to_vec();
-        dd.extend_from_slice(&[il, ih]);
+        dd.extend_from_slice(&chunk_index.to_le_bytes());
         let cs = CCITT.checksum(&dd);
 
         assert_eq!(cs, c.crc16);
+        // XXX: In reality, chunk index is not unique, so it's not the index?
+        if chunks.contains_key(&chunk_index) {
+            dup_chunks += 1;
+            if VERBOSE {
+                println!("dup chunk {chunk_pos:03}: {slot:04x} {chunk_index:04x}");
+            }
+        }
         chunks.insert(chunk_index, c);
     }
-    (chunks, free_chunks)
+    (chunks, free_chunks, dup_chunks)
 }
 
 pub fn parse(data: &[u8]) {
@@ -209,6 +217,7 @@ pub fn parse(data: &[u8]) {
 
     let mut free_data_chunks = 0;
     let mut free_sys_chunks = 0;
+    let mut dup_sys_chunks = 0;
     for pos in (0..size).step_by(PAGE_SIZE) {
         let slice = &data[pos..pos + PAGE_SIZE];
         if u32::read_from_prefix(slice).unwrap() == PAGE_MAGIC {
@@ -224,8 +233,12 @@ pub fn parse(data: &[u8]) {
                     chunks,
                 });
             } else {
-                let (chunks, free) = parse_sys_chunks(slice);
+                let (chunks, free, dups) = parse_sys_chunks(slice);
                 free_sys_chunks += free;
+                dup_sys_chunks += dups;
+                let l = chunks.len();
+                println!("sys page @ 0x{pos:06x}: usn {:02x?}", header.usn);
+                println!("  {l} chunks, {dups} duplicates, {free} free");
                 sys_pages.push(SysPage {
                     offset: pos,
                     header,
@@ -242,7 +255,9 @@ pub fn parse(data: &[u8]) {
     sys_pages.sort_by_key(|p| p.header.usn);
     data_pages.sort_by_key(|p| p.header.first_chunk);
 
+    // The first data chunk comes right after the last system chunk.
     let n_sys_chunks = data_pages.first().unwrap().header.first_chunk;
+
     let mut data = Vec::<u8>::new();
     let mut chunks = Chunks::new();
 
@@ -254,22 +269,21 @@ pub fn parse(data: &[u8]) {
     // NOTE: fails on Lenovo X270 and ASRock Z170
     // assert_eq!(magic, VOL_MAGIC);
 
-    let mut real_n_sys_chunks = free_sys_chunks;
+    let mut real_n_sys_chunks = 0;
     for p in sys_pages {
-        if false {
-            let o = p.offset;
-            let h = p.header;
-            println!("sys page @ 0x{o:08x} {h:02x?}");
-        }
         for (i, c) in p.chunks {
             assert!(i < n_sys_chunks);
             data.extend_from_slice(&c.data);
-            real_n_sys_chunks += 1;
+            if chunks.contains_key(&i) {
+                dup_sys_chunks += 1;
+            } else {
+                real_n_sys_chunks += 1;
+            }
             chunks.insert(i, c);
         }
     }
-    let used_sys_bytes = data.len();
-    println!("expected {n_sys_chunks} but ackshully {real_n_sys_chunks}");
+    // real_n_sys_chunks += dup_sys_chunks;
+    let used_sys_bytes = data.len() + dup_sys_chunks * CHUNK_SIZE;
 
     for (pi, p) in data_pages.iter().enumerate() {
         let first_chunk_expected = n_sys_chunks as usize + pi * DATA_PAGE_CHUNKS;
@@ -295,6 +309,9 @@ pub fn parse(data: &[u8]) {
     let vh = VolHeader::read_from_prefix(&data).unwrap();
     println!("{vh:#04x?}");
 
+    println!(" sys chunks expected: {n_sys_chunks}");
+    println!("          really got: {real_n_sys_chunks}");
+    println!("          duplicates: {dup_sys_chunks}");
     println!();
     println!(" system bytes used 0x{used_sys_bytes:06x}");
     println!("   data bytes used 0x{used_data_bytes:06x}");
@@ -329,6 +346,7 @@ pub fn parse(data: &[u8]) {
     }
 
     if true {
+        println!("size: {size}");
         println!("pages: {n_pages}");
         println!("  sys: {n_sys_pages}");
         println!("  data: {n_data_pages}");

@@ -246,10 +246,14 @@ pub fn parse(data: &[u8], base: usize, e: &crate::fpt::FPTEntry) {
     data_pages.sort_by_key(|p| p.header.first_chunk);
 
     let n_sys_chunks = data_pages.first().unwrap().header.first_chunk;
-    println!("  sys chunks: {n_sys_chunks}");
-
     let mut data = Vec::<u8>::new();
     let mut chunks = Chunks::new();
+
+    // check magic at beginning
+    let mut sp0 = sys_pages.first().unwrap().clone();
+    let sc0 = sp0.chunks.first_entry().unwrap();
+    let magic = u32::read_from_prefix(&sc0.get().data).unwrap();
+    println!("{magic:08x} == {:08x}", FS_START_MAGIC);
 
     for p in sys_pages {
         if false {
@@ -284,9 +288,6 @@ pub fn parse(data: &[u8], base: usize, e: &crate::fpt::FPTEntry) {
     let data_bytes = used_data_bytes + free_data_bytes;
     let sys_bytes = used_sys_bytes + free_sys_bytes;
 
-    // check magic at beginning
-    let magic = u32::read_from_prefix(&data).unwrap();
-    println!("{magic:08x} == {:08x}", FS_START_MAGIC);
     // NOTE: fails on Lenovo X270 and ASRock Z170
     // assert_eq!(magic, FS_START_MAGIC);
     let vh = VolHeader::read_from_prefix(&data).unwrap();

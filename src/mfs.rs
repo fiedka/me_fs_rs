@@ -168,7 +168,7 @@ fn parse_sys_chunks(data: &[u8]) -> (Chunks, usize) {
         }
         // Last chunk is marked
         if slot == SLOT_LAST {
-            let remaining = SYS_PAGE_CHUNKS - chunk_pos;
+            let remaining = SYS_PAGE_CHUNKS - chunk_pos - 1;
             free_chunks += remaining;
             break;
         }
@@ -254,6 +254,7 @@ pub fn parse(data: &[u8]) {
     // NOTE: fails on Lenovo X270 and ASRock Z170
     // assert_eq!(magic, VOL_MAGIC);
 
+    let mut real_n_sys_chunks = free_sys_chunks;
     for p in sys_pages {
         if false {
             let o = p.offset;
@@ -263,17 +264,21 @@ pub fn parse(data: &[u8]) {
         for (i, c) in p.chunks {
             assert!(i < n_sys_chunks);
             data.extend_from_slice(&c.data);
+            real_n_sys_chunks += 1;
             chunks.insert(i, c);
         }
     }
     let used_sys_bytes = data.len();
+    println!("expected {n_sys_chunks} but ackshully {real_n_sys_chunks}");
 
-    for p in data_pages {
-        for (i, c) in p.chunks {
+    for (pi, p) in data_pages.iter().enumerate() {
+        let first_chunk_expected = n_sys_chunks as usize + pi * DATA_PAGE_CHUNKS;
+        assert_eq!(p.header.first_chunk as usize, first_chunk_expected);
+        for (ci, c) in &p.chunks {
             // duplicates are not allowed
-            assert!(!chunks.contains_key(&i));
+            assert!(!chunks.contains_key(ci));
             data.extend_from_slice(&c.data);
-            chunks.insert(i, c);
+            chunks.insert(*ci, *c);
         }
     }
 
@@ -299,7 +304,6 @@ pub fn parse(data: &[u8]) {
     println!("   data bytes free 0x{free_data_bytes:06x}");
     println!("  total bytes free 0x{free_bytes:06x}");
     println!();
-
     println!("  total data bytes 0x{data_bytes:06x}");
     println!(" total sytem bytes 0x{sys_bytes:06x}");
     println!("       total bytes 0x{:06x}", used_bytes + free_bytes);

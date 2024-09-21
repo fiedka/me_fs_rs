@@ -95,26 +95,6 @@ Iterate over system pages in ascending USN order
   Iterate over all used chunks on the current page
     Calculate chunk size (iChunk) based on pg.axIdx[i]
     sysArea[iChunk*64 : (iChunk+1)*64] = pg.chunks[i].data
-
-found in sys page:
-
-000e86b0: 0162 4f72 0100 0000 808b 0500 0002 0000  .bOr............
-000e86c0: 0000 fd0e f80e 1215 780a 0002 0000 ce14  ........x.......
-
-cbTotal = 0x00058b08 = 363272
-nFiles = 0x200 = 512
-
-typedef struct {
-    unsigned __int32 sign; // Сигнатура тома == 0x724F6201
-    unsigned __int32 ver; // Версия тома? == 1
-    unsigned __int32 cbTotal; // Общая емкость тома (системная область + данные)
-    unsigned __int16 nFiles; // Число файловых записей
-} T_MFS_Volume_Hdr; // 14 bytes
-
-typedef struct {
-    T_MFS_Volume_Hdr vol; // Заголовок тома
-    unsigned __int16 aFAT[vol.nFiles + nDataChunks]; // Таблица размещения файлов
-} T_MFS_System_Area;
 */
 
 // *CCITT CRC-16 is calculated from the chunk data and the 16-bit (2-byte) chunk index
@@ -180,14 +160,14 @@ fn parse_sys_chunks(data: &[u8]) -> (Chunks, usize) {
 
     for chunk_pos in 0..SYS_PAGE_SLOTS {
         let o = SLOTS_OFFSET + 2 * chunk_pos;
-        let s = u16::read_from_prefix(&data[o..]).unwrap();
+        let slot = u16::read_from_prefix(&data[o..]).unwrap();
 
-        if s == SLOT_UNUSED {
+        if slot == SLOT_UNUSED {
             free_chunks += 1;
             continue;
         }
         // Last chunk is marked
-        if s == SLOT_LAST {
+        if slot == SLOT_LAST {
             let remaining = SYS_PAGE_CHUNKS - chunk_pos;
             free_chunks += remaining;
             break;
@@ -199,7 +179,7 @@ fn parse_sys_chunks(data: &[u8]) -> (Chunks, usize) {
         let c = Chunk::read_from_prefix(cbuf).unwrap();
 
         // Calculate chunk index
-        chunk_index = crc_idx(chunk_index) ^ s;
+        chunk_index = crc_idx(chunk_index) ^ slot;
         let il = chunk_index as u8;
         let ih = (chunk_index >> 8) as u8;
 
@@ -209,7 +189,7 @@ fn parse_sys_chunks(data: &[u8]) -> (Chunks, usize) {
         let cs = CCITT.checksum(&dd);
 
         assert_eq!(cs, c.crc16);
-        chunks.insert(s, c);
+        chunks.insert(chunk_index, c);
     }
     (chunks, free_chunks)
 }
@@ -222,7 +202,7 @@ pub fn parse(data: &[u8], base: usize, e: &crate::fpt::FPTEntry) {
     let n_sys_pages = n_pages / 12;
     let n_data_pages = n_pages - n_sys_pages - 1;
 
-    let n_sys_chunks = n_sys_pages * SYS_PAGE_CHUNKS;
+    // let n_sys_chunks = n_sys_pages * SYS_PAGE_CHUNKS;
     let n_data_chunks = n_data_pages * DATA_PAGE_CHUNKS;
 
     let mut data_pages = Vec::<DataPage>::new();
@@ -237,9 +217,10 @@ pub fn parse(data: &[u8], base: usize, e: &crate::fpt::FPTEntry) {
             let c = &data[pos..pos + PAGE_HEADER_SIZE];
             let header = PageHeader::read_from_prefix(c).unwrap();
 
+            let slice = &data[pos..];
             let is_data = header.first_chunk > 0;
             if is_data {
-                let (chunks, free_chunks) = parse_data_chunks(&data[pos..], header.first_chunk);
+                let (chunks, free_chunks) = parse_data_chunks(slice, header.first_chunk);
                 free_data_chunks += free_chunks;
                 data_pages.push(DataPage {
                     offset: pos,
@@ -247,7 +228,7 @@ pub fn parse(data: &[u8], base: usize, e: &crate::fpt::FPTEntry) {
                     chunks,
                 });
             } else {
-                let (chunks, free_chunks) = parse_sys_chunks(&data[pos..]);
+                let (chunks, free_chunks) = parse_sys_chunks(slice);
                 free_sys_chunks += free_chunks;
                 sys_pages.push(SysPage {
                     offset: pos,
@@ -264,22 +245,35 @@ pub fn parse(data: &[u8], base: usize, e: &crate::fpt::FPTEntry) {
     sys_pages.sort_by_key(|p| p.header.usn);
     data_pages.sort_by_key(|p| p.header.first_chunk);
 
-    let mut data = Vec::<u8>::new();
-    for p in sys_pages {
-        let o = p.offset;
-        let h = p.header;
-        println!("sys page @ 0x{o:08x} {h:04x?}");
+    let n_sys_chunks = data_pages.first().unwrap().header.first_chunk;
+    println!("  sys chunks: {n_sys_chunks}");
 
-        for (_, c) in p.chunks {
+    let mut data = Vec::<u8>::new();
+    let mut chunks = Chunks::new();
+
+    for p in sys_pages {
+        if false {
+            let o = p.offset;
+            let h = p.header;
+            println!("sys page @ 0x{o:08x} {h:02x?}");
+        }
+        for (i, c) in p.chunks {
+            assert!(i < n_sys_chunks);
             data.extend_from_slice(&c.data);
+            chunks.insert(i, c);
         }
     }
     let used_sys_bytes = data.len();
+
     for p in data_pages {
-        for (_, c) in p.chunks {
+        for (i, c) in p.chunks {
+            // duplicates are not allowed
+            assert!(!chunks.contains_key(&i));
             data.extend_from_slice(&c.data);
+            chunks.insert(i, c);
         }
     }
+
     let used_bytes = data.len();
     let used_data_bytes = used_bytes - used_sys_bytes;
 
@@ -337,13 +331,16 @@ pub fn parse(data: &[u8], base: usize, e: &crate::fpt::FPTEntry) {
         println!("  sys: {n_sys_pages}");
         println!("  data: {n_data_pages}");
         println!("  blank at 0x{blank_page:08x}");
-        println!("data chunks: {n_data_chunks}");
+
+        println!("\nchunks:");
+        println!(" system chunks: {n_sys_chunks}");
+        println!("   data chunks: {n_data_chunks}");
 
         println!("\nbytes:");
+        let sys_bytes = n_sys_chunks as usize * CHUNK_DATA_SIZE;
         let data_bytes = n_data_chunks * CHUNK_DATA_SIZE;
-        let sys_bytes = n_sys_chunks * CHUNK_DATA_SIZE;
-        println!("   data bytes: 0x{data_bytes:06x}");
         println!(" system bytes: 0x{sys_bytes:06x}");
+        println!("   data bytes: 0x{data_bytes:06x}");
         println!("  total bytes: 0x{:06x}", data_bytes + sys_bytes);
     }
 }

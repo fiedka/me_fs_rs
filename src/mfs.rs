@@ -226,8 +226,12 @@ fn get_file<'a>(
         assert!(i_node >= n_files);
         let ci = i_node + n_sys_chunks - n_files;
         let c = chunks[&ci];
+        // HACK
+        if i_node > 0x100 {
+            i_node -= 0xe0;
+        }
         i_node = fat[i_node as usize];
-        println!("  next {i_node}");
+        println!("  next {i_node:04x}");
         // For the last chunk, i_node is the number of remaining bytes
         if i_node > 0 && i_node as usize <= CHUNK_SIZE {
             data.extend_from_slice(&c.data[..i_node as usize]);

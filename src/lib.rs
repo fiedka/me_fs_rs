@@ -154,6 +154,7 @@ fn parse_mfs(data: &[u8], base: usize, e: &fpt::FPTEntry) {
     data_pages.sort_by_key(|p| p.header.first_chunk);
     sys_pages.sort_by_key(|p| p.header.usn);
 
+    // check magic at beginning
     let ps = &mut sys_pages.clone();
     let e0 = ps[0].chunks.first_entry().unwrap();
     let c0 = e0.get();
@@ -167,6 +168,10 @@ fn parse_mfs(data: &[u8], base: usize, e: &fpt::FPTEntry) {
 
     let mut data = Vec::<u8>::new();
     for p in sys_pages {
+        let o = p.offset;
+        let h = p.header;
+        println!("sys page @ 0x{o:08x} {h:04x?}");
+
         for (_, c) in p.chunks {
             data.extend_from_slice(&c.data);
         }
@@ -211,19 +216,15 @@ fn parse_mfs(data: &[u8], base: usize, e: &fpt::FPTEntry) {
         fat.push(f);
     }
 
-    println!("FAT");
-    for f in fat.iter().take(10) {
-        print!(" {f:04x?}");
+    if false {
+        println!();
+        println!("FAT");
+        for f in fat.iter().take(10) {
+            print!(" {f:04x?}");
+        }
+        println!();
+        println!();
     }
-    println!();
-
-    /*
-    for p in sys_pages {
-        let o = p.offset;
-        let h = p.header;
-        // println!("sys page @ 0x{o:08x} {h:04x?}")
-    }
-    */
 
     if true {
         println!("pages: {pages}");
@@ -231,11 +232,13 @@ fn parse_mfs(data: &[u8], base: usize, e: &fpt::FPTEntry) {
         println!("  data: {n_data_pages}");
         println!("  blank at 0x{blank_page:08x}");
         println!("data chunks: {n_data_chunks}");
+
+        println!("\nbytes:");
         let data_bytes = n_data_chunks * mfs::MFS_CHUNK_DATA_SIZE;
-        println!("  data bytes: {data_bytes:08x}");
         let sys_bytes = n_sys_chunks * mfs::MFS_CHUNK_DATA_SIZE;
-        println!("system bytes: {sys_bytes:08x}");
-        println!(" total bytes: {:08x}", data_bytes + sys_bytes);
+        println!("   data bytes: 0x{data_bytes:08x}");
+        println!(" system bytes: 0x{sys_bytes:08x}");
+        println!("  total bytes: 0{:08x}", data_bytes + sys_bytes);
     }
 }
 

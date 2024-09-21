@@ -35,22 +35,26 @@ pub fn parse(data: &[u8]) -> Result<ME_FPT, String> {
                     let n = std::str::from_utf8(&e.name).unwrap();
                     // some names are shorter than 4 bytes and padded with 0x0
                     let n = n.trim_end_matches(char::from(0));
+                    match n {
+                        "FTPR" | "NFTP" => {
+                            let o = base + e.offset as usize;
+                            let s = e.size as usize;
 
-                    if n == "FTPR" || n == "NFTP" {
-                        let o = base + e.offset as usize;
-                        let s = e.size as usize;
-
-                        let buf = &data[o..o + 4];
-                        if let Ok(sig) = std::str::from_utf8(buf) {
-                            if sig == cpd::CPD_MAGIC {
-                                let cpd = cpd::parse_cpd(&data[o..o + s]).unwrap();
-                                directories.push(cpd);
+                            let buf = &data[o..o + 4];
+                            if let Ok(sig) = std::str::from_utf8(buf) {
+                                if sig == cpd::CPD_MAGIC {
+                                    let cpd = cpd::parse_cpd(&data[o..o + s]).unwrap();
+                                    directories.push(cpd);
+                                }
                             }
                         }
-                    }
 
-                    if n == "MFS" {
-                        mfs::parse(data, base, e);
+                        "MFS" => {
+                            mfs::parse(data, base, e);
+                        }
+                        _ => {
+                            println!("Cannot parse {n} (yet), skipping...");
+                        }
                     }
                 }
 

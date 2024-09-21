@@ -194,15 +194,13 @@ fn parse_sys_chunks(data: &[u8]) -> (Chunks, usize) {
     (chunks, free_chunks)
 }
 
-pub fn parse(data: &[u8], base: usize, e: &crate::fpt::FPTEntry) {
-    let o = base + e.offset as usize;
-    let s = e.size as usize;
-    let end = o + s;
-    let n_pages = s / PAGE_SIZE;
+pub fn parse(data: &[u8]) {
+    let size = data.len();
+    let n_pages = size / PAGE_SIZE;
     let n_sys_pages = n_pages / 12;
     let n_data_pages = n_pages - n_sys_pages - 1;
 
-    // let n_sys_chunks = n_sys_pages * SYS_PAGE_CHUNKS;
+    let max_sys_chunks = n_sys_pages * SYS_PAGE_CHUNKS;
     let n_data_chunks = n_data_pages * DATA_PAGE_CHUNKS;
 
     let mut data_pages = Vec::<DataPage>::new();
@@ -211,25 +209,23 @@ pub fn parse(data: &[u8], base: usize, e: &crate::fpt::FPTEntry) {
 
     let mut free_data_chunks = 0;
     let mut free_sys_chunks = 0;
-    for pos in (o..end).step_by(PAGE_SIZE) {
-        let magic = u32::read_from_prefix(&data[pos..pos + 4]).unwrap();
-        if magic == PAGE_MAGIC {
-            let c = &data[pos..pos + PAGE_HEADER_SIZE];
-            let header = PageHeader::read_from_prefix(c).unwrap();
+    for pos in (0..size).step_by(PAGE_SIZE) {
+        let slice = &data[pos..pos + PAGE_SIZE];
+        if u32::read_from_prefix(slice).unwrap() == PAGE_MAGIC {
+            let header = PageHeader::read_from_prefix(slice).unwrap();
 
-            let slice = &data[pos..];
             let is_data = header.first_chunk > 0;
             if is_data {
-                let (chunks, free_chunks) = parse_data_chunks(slice, header.first_chunk);
-                free_data_chunks += free_chunks;
+                let (chunks, free) = parse_data_chunks(slice, header.first_chunk);
+                free_data_chunks += free;
                 data_pages.push(DataPage {
                     offset: pos,
                     header,
                     chunks,
                 });
             } else {
-                let (chunks, free_chunks) = parse_sys_chunks(slice);
-                free_sys_chunks += free_chunks;
+                let (chunks, free) = parse_sys_chunks(slice);
+                free_sys_chunks += free;
                 sys_pages.push(SysPage {
                     offset: pos,
                     header,
@@ -238,6 +234,7 @@ pub fn parse(data: &[u8], base: usize, e: &crate::fpt::FPTEntry) {
             }
         } else {
             // this should occur exactly once
+            assert_eq!(blank_page, 0);
             blank_page = pos;
         }
     }
@@ -335,6 +332,7 @@ pub fn parse(data: &[u8], base: usize, e: &crate::fpt::FPTEntry) {
 
         println!("\nchunks:");
         println!(" system chunks: {n_sys_chunks}");
+        println!("max sys chunks: {max_sys_chunks}");
         println!("   data chunks: {n_data_chunks}");
 
         println!("\nbytes:");

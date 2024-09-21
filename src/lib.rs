@@ -50,7 +50,9 @@ pub fn parse(data: &[u8]) -> Result<ME_FPT, String> {
                         }
 
                         "MFS" => {
-                            mfs::parse(data, base, e);
+                            let o = base + e.offset as usize;
+                            let s = e.size as usize;
+                            mfs::parse(&data[o..o + s]);
                         }
                         _ => {
                             println!("Cannot parse {n} (yet), skipping...");

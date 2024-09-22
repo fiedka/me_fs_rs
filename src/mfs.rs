@@ -262,10 +262,9 @@ pub fn parse(data: &[u8]) {
     let n_pages = size / PAGE_SIZE;
     let n_sys_pages = n_pages / 12;
     let n_data_pages = n_pages - n_sys_pages - 1;
-
-    let max_sys_chunks = n_sys_pages * SYS_PAGE_CHUNKS;
     let n_data_chunks = n_data_pages * DATA_PAGE_CHUNKS;
 
+    // Parse the pages and chunks.
     let mut data_pages = Vec::<DataPage>::new();
     let mut sys_pages = Vec::<SysPage>::new();
     let mut blank_page = 0;
@@ -312,18 +311,17 @@ pub fn parse(data: &[u8]) {
     sys_pages.sort_by_key(|p| p.header.usn);
     data_pages.sort_by_key(|p| p.header.first_chunk);
 
-    // The first data chunk comes right after the last system chunk.
+    // NOTE: The chunks have indices and are not sorted upfront.
+    // The first data chunk index must be less than the last system chunk.
     let n_sys_chunks = data_pages.first().unwrap().header.first_chunk;
 
     let mut chunks = Chunks::new();
-
     for p in sys_pages {
         for (i, c) in p.chunks {
             assert!(i < n_sys_chunks);
             chunks.insert(i, c);
         }
     }
-
     for (pi, p) in data_pages.iter().enumerate() {
         let first_chunk_expected = n_sys_chunks as usize + pi * DATA_PAGE_CHUNKS;
         assert_eq!(p.header.first_chunk as usize, first_chunk_expected);
@@ -334,39 +332,44 @@ pub fn parse(data: &[u8]) {
         }
     }
 
-    // check magic at beginning
-    let magic = u32::read_from_prefix(&chunks[&0].data).unwrap();
+    // The first chunk is the start of the volume, so check magic at beginning.
+    let c0 = chunks[&0].data;
+    let magic = u32::read_from_prefix(&c0).unwrap();
     assert_eq!(magic, VOL_MAGIC);
+    let vh = VolHeader::read_from_prefix(&c0).unwrap();
 
+    // NOTE: Not all system chunks are really set.
+    // Initialize a zero-filled slice and fill in the existing chunks.
     let n_sys_bytes = n_sys_chunks as usize * CHUNK_DATA_SIZE;
     let mut sys_data = vec![0u8; n_sys_bytes];
     for i in 0..n_sys_chunks {
         if chunks.contains_key(&i) {
             let c = chunks.get(&i).unwrap();
             let o = i as usize * CHUNK_DATA_SIZE;
+            // FIXME: This could probably be more efficient.
             for (j, b) in c.data.iter().enumerate() {
                 sys_data[o + j] = *b;
             }
         }
     }
 
-    let vh = VolHeader::read_from_prefix(&sys_data).unwrap();
+    // NOTE: The file system table comes right after the volume header.
+    // Table entries are two bytes each.
     let total_files_and_chunks = vh.files as usize + n_data_chunks;
-
     let mut fat = vec![0u16; total_files_and_chunks];
     let d = &sys_data[VOL_HEADER_SIZE..VOL_HEADER_SIZE + total_files_and_chunks * 2];
     for (i, e) in fat.iter_mut().enumerate() {
-        // two bytes each
         let p = i * 2;
         *e = u16::read_from(&d[p..p + 2]).unwrap();
     }
-
     if DEBUG_FAT {
         println!("fat size: {}", fat.len());
         dump_u16(&fat);
     }
 
     if PRINT {
+        let n_data_bytes = n_data_chunks * CHUNK_DATA_SIZE;
+        let n_total_bytes = n_sys_bytes + n_data_bytes;
         println!("size: {size}");
         println!("pages: {n_pages}");
         println!("  system: {n_sys_pages}");
@@ -375,20 +378,18 @@ pub fn parse(data: &[u8]) {
         println!();
         println!("chunks: {}", chunks.len());
         println!("   system: {n_sys_chunks}");
-        println!("  max sys: {max_sys_chunks}");
         println!("     data: {n_data_chunks}");
         println!();
         println!("files: {}", vh.files);
         println!("total files and data chunks: {total_files_and_chunks}");
         println!();
-        let n_data_bytes = n_data_chunks * CHUNK_DATA_SIZE;
-        let n_total_bytes = n_sys_bytes + n_data_bytes;
         println!("bytes: {n_total_bytes}");
         println!("  system: {n_sys_bytes}");
         println!("    data: {n_data_bytes}");
         println!();
     }
 
+    // Dump some example files.
     let files: Vec<(usize, &str)> = [(6, "intel.cfg"), (7, "fitc.cfg")].into();
     for (file_index, file_name) in files {
         match get_file(&chunks, n_sys_chunks, &fat, vh.files, file_index) {

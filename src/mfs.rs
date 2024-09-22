@@ -370,22 +370,20 @@ pub fn parse(data: &[u8]) {
     if PRINT {
         let n_data_bytes = n_data_chunks * CHUNK_DATA_SIZE;
         let n_total_bytes = n_sys_bytes + n_data_bytes;
-        println!("size: {size}");
-        println!("pages: {n_pages}");
-        println!("  system: {n_sys_pages}");
-        println!("    data: {n_data_pages}");
-        println!("  blank at 0x{blank_page:08x}");
         println!();
-        println!("chunks: {}", chunks.len());
-        println!("   system: {n_sys_chunks}");
-        println!("     data: {n_data_chunks}");
-        println!();
-        println!("files: {}", vh.files);
-        println!("total files and data chunks: {total_files_and_chunks}");
-        println!();
-        println!("bytes: {n_total_bytes}");
-        println!("  system: {n_sys_bytes}");
-        println!("    data: {n_data_bytes}");
+        println!("MFS");
+        println!(" - size: {size}");
+        println!(" - pages: {n_pages}");
+        println!("    system: {n_sys_pages}");
+        println!("      data: {n_data_pages}");
+        println!("    blank at 0x{blank_page:08x}");
+        println!(" - chunks: {}", chunks.len());
+        println!("    system: {n_sys_chunks}");
+        println!("      data: {n_data_chunks}");
+        println!(" - total files and data chunks: {total_files_and_chunks}");
+        println!(" - chunk bytes: {n_total_bytes}");
+        println!("    system: {n_sys_bytes}");
+        println!("      data: {n_data_bytes}");
         println!();
     }
 
@@ -403,6 +401,22 @@ pub fn parse(data: &[u8]) {
             Err(e) => {
                 if VERBOSE {
                     println!("file {file_index:04} {file_name}: {e}");
+                }
+            }
+        }
+    }
+
+    println!(" files: {}", vh.files);
+    for file_index in 0..vh.files as usize {
+        match get_file(&chunks, n_sys_chunks, &fat, vh.files, file_index) {
+            Ok(f) => {
+                if PRINT {
+                    println!("    {file_index:04}: {:5} bytes", f.len());
+                }
+            }
+            Err(e) => {
+                if PRINT {
+                    println!("    {file_index:04}: {e}");
                 }
             }
         }

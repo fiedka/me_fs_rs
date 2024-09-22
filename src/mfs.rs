@@ -385,11 +385,7 @@ fn get_blob<'a>(
             let n = n.trim_end_matches("\0");
             if !n.is_empty() && f.mode & VFS_DIRECTORY > 0 {
                 println!();
-                println!("{n:12}");
                 let fi = f.file_index as usize;
-                if n.starts_with(".") {
-                    continue;
-                }
                 let nd = format!("{dir}/{n}");
                 get_dir(chunks, n_sys_chunks, fat, n_files, &nd, fi);
             }

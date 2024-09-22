@@ -102,8 +102,16 @@ struct DirEntry {
 }
 
 const DIR_ENTRY_SIZE: usize = 24;
-const SZ: usize = std::mem::size_of::<DirEntry>();
+// const SZ: usize = std::mem::size_of::<DirEntry>();
 // assert_eq!(DIR_ENTRY_SIZE, SZ);
+
+#[derive(FromBytes, FromZeroes, Serialize, Deserialize, Clone, Copy, Debug)]
+#[repr(C)]
+struct BlobSec {
+    hmac: [u8; 32],
+    flags: u32,
+    nonce: [u8; 16],
+}
 
 /*
 data areas
@@ -313,11 +321,14 @@ const VFS_DIRECTORY: u16 = 0x4000;
 const FILE_TYPE_XXX: u16 = 0;
 const FILE_TYPE_DIR: u16 = 1;
 
+const SEC_SIZE: usize = 32 + 4 + 16;
+
 fn get_blob<'a>(
     chunks: &Chunks,
     n_sys_chunks: u16,
     fat: &[u16],
     n_files: u16,
+    dir: &str,
     file_index: usize,
 ) -> Result<Vec<u8>, &'a str> {
     let salt = 0;
@@ -328,46 +339,59 @@ fn get_blob<'a>(
     let file_type = FILE_TYPE_DIR;
 
     let size = file_data.len();
-    let rest = size % DIR_ENTRY_SIZE;
-    // assert_eq!(rest, 0);
+    let list_size = size - SEC_SIZE;
+    let rest = list_size % DIR_ENTRY_SIZE;
+    assert_eq!(rest, 0);
+
+    let sec = BlobSec::read_from_prefix(&file_data[list_size..]).unwrap();
+    assert_eq!(sec.flags, 0x98);
 
     let mut files = Vec::<DirEntry>::new();
-
-    for o in (0..size - rest).step_by(DIR_ENTRY_SIZE) {
+    for o in (0..list_size).step_by(DIR_ENTRY_SIZE) {
         let d = &file_data[o..o + DIR_ENTRY_SIZE];
         let e = DirEntry::read_from_prefix(d).unwrap();
         files.push(e);
     }
 
     for (i, f) in files.iter().enumerate() {
+        let m = f.mode;
+        let n = &f.name[..2];
+        if let Ok(n) = from_utf8(n) {
+            let n = n.trim_end_matches("\0");
+            if n == "." || n == ".." {
+                print!("  {n:12} {m:04x}");
+                continue;
+            }
+        }
         if let Ok(n) = from_utf8(&f.name) {
             if i % 5 == 0 {
                 println!();
             }
             let n = n.trim_end_matches("\0");
-            let n = if n.is_empty() { "[no name]" } else { n };
-            let m = f.mode;
             print!("  {n:12} {m:04x}");
         }
     }
     println!();
 
     for (i, f) in files.iter().enumerate() {
+        let n = &f.name[..2];
+        if let Ok(n) = from_utf8(n) {
+            let n = n.trim_end_matches("\0");
+            if n == "." || n == ".." {
+                continue;
+            }
+        }
         if let Ok(n) = from_utf8(&f.name) {
             let n = n.trim_end_matches("\0");
             if !n.is_empty() && f.mode & VFS_DIRECTORY > 0 {
                 println!();
                 println!("{n:12}");
                 let fi = f.file_index as usize;
-                if n == "." || n == ".." || n.starts_with(".") {
+                if n.starts_with(".") {
                     continue;
                 }
-                match get_blob(chunks, n_sys_chunks, fat, n_files, fi) {
-                    Ok(_) => {}
-                    Err(e) => {
-                        println!("{e}");
-                    }
-                }
+                let nd = format!("{dir}/{n}");
+                get_dir(chunks, n_sys_chunks, fat, n_files, &nd, fi);
             }
         }
     }
@@ -384,7 +408,7 @@ fn get_dir(
     file_index: usize,
 ) {
     println!("/{dir}:");
-    match get_blob(chunks, n_sys_chunks, fat, n_files, file_index) {
+    match get_blob(chunks, n_sys_chunks, fat, n_files, dir, file_index) {
         Ok(_) => {}
         Err(e) => {
             println!("{e}");

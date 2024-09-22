@@ -9,6 +9,7 @@ use zerocopy_derive::{FromBytes, FromZeroes};
 
 const PRINT: bool = true;
 const DEBUG_FAT: bool = false;
+const DUMP_FILES: bool = false;
 const VERBOSE: bool = false;
 
 // see https://live.ructf.org/intel_me.pdf slide 35
@@ -257,6 +258,37 @@ fn dump_u16(a: &[u16]) {
     println!();
 }
 
+// Dump some example files.
+fn dump_files(chunks: &Chunks, n_sys_chunks: u16, fat: &[u16], n_files: u16) {
+    let files: Vec<(usize, &str)> = [(6, "intel.cfg"), (7, "fitc.cfg")].into();
+    for (file_index, file_name) in files {
+        match get_file(chunks, n_sys_chunks, fat, n_files, file_index) {
+            Ok(f) => {
+                println!("file {file_index:04} {file_name}: {:5} bytes", f.len());
+                let mut file = File::create(file_name).unwrap();
+                file.write_all(&f).unwrap();
+            }
+            Err(e) => {
+                println!("file {file_index:04} {file_name}: {e}");
+            }
+        }
+    }
+}
+
+fn print_files(chunks: &Chunks, n_sys_chunks: u16, fat: &[u16], n_files: u16) {
+    println!(" files: {n_files}");
+    for file_index in 0..n_files as usize {
+        match get_file(chunks, n_sys_chunks, fat, n_files, file_index) {
+            Ok(f) => {
+                println!("    {file_index:04}: {:5} bytes", f.len());
+            }
+            Err(e) => {
+                println!("    {file_index:04}: {e}");
+            }
+        }
+    }
+}
+
 pub fn parse(data: &[u8]) {
     let size = data.len();
     let n_pages = size / PAGE_SIZE;
@@ -385,40 +417,13 @@ pub fn parse(data: &[u8]) {
         println!("    system: {n_sys_bytes}");
         println!("      data: {n_data_bytes}");
         println!();
+        print_files(&chunks, n_sys_chunks, &fat, vh.files);
     }
 
-    // Dump some example files.
-    let files: Vec<(usize, &str)> = [(6, "intel.cfg"), (7, "fitc.cfg")].into();
-    for (file_index, file_name) in files {
-        match get_file(&chunks, n_sys_chunks, &fat, vh.files, file_index) {
-            Ok(f) => {
-                if VERBOSE {
-                    println!("file {file_index:04} {file_name} size: {}", f.len());
-                }
-                let mut file = File::create(file_name).unwrap();
-                file.write_all(&f).unwrap();
-            }
-            Err(e) => {
-                if VERBOSE {
-                    println!("file {file_index:04} {file_name}: {e}");
-                }
-            }
-        }
+    if DUMP_FILES {
+        dump_files(&chunks, n_sys_chunks, &fat, vh.files);
     }
 
-    println!(" files: {}", vh.files);
-    for file_index in 0..vh.files as usize {
-        match get_file(&chunks, n_sys_chunks, &fat, vh.files, file_index) {
-            Ok(f) => {
-                if PRINT {
-                    println!("    {file_index:04}: {:5} bytes", f.len());
-                }
-            }
-            Err(e) => {
-                if PRINT {
-                    println!("    {file_index:04}: {e}");
-                }
-            }
-        }
-    }
+    // TODO: traverse directories
+    println!(" var fs: {:04x}", fat[8]);
 }

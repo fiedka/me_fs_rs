@@ -215,7 +215,6 @@ fn get_file<'a>(
     file_index: usize,
 ) -> Result<Vec<u8>, &'a str> {
     let mut i_node = fat[file_index];
-    println!("  chunks: {}, fat size: {}", chunks.len(), fat.len());
     println!("  file {file_index:04} iNode {i_node:04x}");
     if i_node == 0xffff {
         return Err("empty file");
@@ -229,12 +228,8 @@ fn get_file<'a>(
         assert!(i_node >= n_files);
         let ci = i_node + n_sys_chunks - n_files;
         let c = chunks[&ci];
-        // HACK
-        if i_node > 0x100 {
-            i_node -= 0xe0;
-        }
         i_node = fat[i_node as usize];
-        println!("  next {i_node:04x}");
+        // println!("  next {i_node:04x}");
         // For the last chunk, i_node is the number of remaining bytes
         if i_node > 0 && i_node as usize <= CHUNK_SIZE {
             data.extend_from_slice(&c.data[..i_node as usize]);
@@ -259,9 +254,6 @@ pub fn parse(data: &[u8]) {
     let mut sys_pages = Vec::<SysPage>::new();
     let mut blank_page = 0;
 
-    let mut free_data_chunks = 0;
-    let mut free_sys_chunks = 0;
-    let mut dup_sys_chunks = 0;
     for pos in (0..size).step_by(PAGE_SIZE) {
         let slice = &data[pos..pos + PAGE_SIZE];
         if u32::read_from_prefix(slice).unwrap() == PAGE_MAGIC {
@@ -270,7 +262,6 @@ pub fn parse(data: &[u8]) {
             let is_data = header.first_chunk > 0;
             if is_data {
                 let (chunks, free) = parse_data_chunks(slice, header.first_chunk);
-                free_data_chunks += free;
                 data_pages.push(DataPage {
                     offset: pos,
                     header,
@@ -278,8 +269,6 @@ pub fn parse(data: &[u8]) {
                 });
             } else {
                 let (chunks, free, dups) = parse_sys_chunks(slice);
-                free_sys_chunks += free;
-                dup_sys_chunks += dups;
                 let l = chunks.len();
                 println!("sys page @ 0x{pos:06x}: usn {:02x?}", header.usn);
                 println!("  {l} chunks, {dups} duplicates, {free} free");
@@ -302,35 +291,14 @@ pub fn parse(data: &[u8]) {
     // The first data chunk comes right after the last system chunk.
     let n_sys_chunks = data_pages.first().unwrap().header.first_chunk;
 
-    let mut data = Vec::<u8>::new();
     let mut chunks = Chunks::new();
 
-    // check magic at beginning
-    let mut sp0 = sys_pages.first().unwrap().clone();
-    let sc0 = sp0.chunks.first_entry().unwrap();
-    let magic = u32::read_from_prefix(&sc0.get().data).unwrap();
-    println!("{magic:08x} == {:08x}", VOL_MAGIC);
-    // NOTE: fails on Lenovo X270 and ASRock Z170
-    // assert_eq!(magic, VOL_MAGIC);
-
-    let mut real_n_sys_chunks = 0;
     for p in sys_pages {
         for (i, c) in p.chunks {
             assert!(i < n_sys_chunks);
-            if chunks.contains_key(&i) {
-                dup_sys_chunks += 1;
-            } else {
-                real_n_sys_chunks += 1;
-            }
             chunks.insert(i, c);
         }
     }
-    for (_, c) in &chunks {
-        data.extend_from_slice(&c.data);
-    }
-
-    // real_n_sys_chunks += dup_sys_chunks;
-    let used_sys_bytes = data.len() + dup_sys_chunks * CHUNK_SIZE;
 
     for (pi, p) in data_pages.iter().enumerate() {
         let first_chunk_expected = n_sys_chunks as usize + pi * DATA_PAGE_CHUNKS;
@@ -338,50 +306,45 @@ pub fn parse(data: &[u8]) {
         for (ci, c) in &p.chunks {
             // duplicates are not allowed
             assert!(!chunks.contains_key(ci));
-            data.extend_from_slice(&c.data);
             chunks.insert(*ci, *c);
         }
     }
 
-    let used_bytes = data.len();
-    let used_data_bytes = used_bytes - used_sys_bytes;
+    // check magic at beginning
+    let magic = u32::read_from_prefix(&chunks[&0].data).unwrap();
+    assert_eq!(magic, VOL_MAGIC);
 
-    let free_data_bytes = free_data_chunks * CHUNK_DATA_SIZE;
-    let free_sys_bytes = free_sys_chunks * CHUNK_DATA_SIZE;
-    let free_bytes = free_sys_bytes + free_data_bytes;
+    let n_sys_bytes = n_sys_chunks as usize * CHUNK_DATA_SIZE;
+    let mut sys_data = vec![0u8; n_sys_bytes];
+    println!("sys bytes: 0x{n_sys_bytes:06x}  {n_sys_chunks}");
+    for i in 0..n_sys_chunks {
+        if chunks.contains_key(&i) {
+            let c = chunks.get(&i).unwrap();
+            let o = i as usize * CHUNK_DATA_SIZE;
+            print!("\n{o:03x}:");
+            for (j, b) in c.data.iter().enumerate() {
+                if j % 16 == 0 {
+                    println!();
+                }
+                print!(" {b:02x}");
+                sys_data[o + j] = *b;
+            }
+        }
+    }
 
-    let data_bytes = used_data_bytes + free_data_bytes;
-    let sys_bytes = used_sys_bytes + free_sys_bytes;
-
-    let vh = VolHeader::read_from_prefix(&data).unwrap();
+    let vh = VolHeader::read_from_prefix(&sys_data).unwrap();
     println!("{vh:#04x?}");
-
-    println!(" sys chunks expected: {n_sys_chunks}");
-    println!("          really got: {real_n_sys_chunks}");
-    println!("          duplicates: {dup_sys_chunks}");
-    println!();
-    println!(" system bytes used 0x{used_sys_bytes:06x}");
-    println!("   data bytes used 0x{used_data_bytes:06x}");
-    println!("  total bytes used 0x{used_bytes:06x}");
-    println!();
-    println!(" system bytes free 0x{free_sys_bytes:06x}");
-    println!("   data bytes free 0x{free_data_bytes:06x}");
-    println!("  total bytes free 0x{free_bytes:06x}");
-    println!();
-    println!("  total data bytes 0x{data_bytes:06x}");
-    println!(" total sytem bytes 0x{sys_bytes:06x}");
-    println!("       total bytes 0x{:06x}", used_bytes + free_bytes);
-    println!("     expected      0x{:06x}", vh.chunk_bytes_total);
-    println!();
 
     let total_files_and_chunks = vh.files as usize + n_data_chunks;
     println!("total files and chunks: {total_files_and_chunks}");
-    let mut fat = Vec::<u16>::new();
-    let d = &data[VOL_HEADER_SIZE..VOL_HEADER_SIZE + total_files_and_chunks * 2];
+
+    let mut fat = vec![0u16; total_files_and_chunks];
+    let d = &sys_data[VOL_HEADER_SIZE..VOL_HEADER_SIZE + total_files_and_chunks * 2];
     // two bytes each
-    for p in (0..total_files_and_chunks).step_by(2) {
+    for i in 0..total_files_and_chunks {
+        let p = i * 2;
         let f = u16::read_from(&d[p..p + 2]).unwrap();
-        fat.push(f);
+        fat[i] = f;
     }
 
     if DEBUG_FAT {
@@ -409,13 +372,13 @@ pub fn parse(data: &[u8]) {
         println!("  sys: {n_sys_pages}");
         println!("  data: {n_data_pages}");
         println!("  blank at 0x{blank_page:08x}");
-
-        println!("\nchunks:");
+        println!();
+        println!("chunks:");
         println!(" system chunks: {n_sys_chunks}");
         println!("max sys chunks: {max_sys_chunks}");
         println!("   data chunks: {n_data_chunks}");
-
-        println!("\nbytes:");
+        println!();
+        println!("bytes:");
         let sys_bytes = n_sys_chunks as usize * CHUNK_DATA_SIZE;
         let data_bytes = n_data_chunks * CHUNK_DATA_SIZE;
         println!(" system bytes: 0x{sys_bytes:06x}");
@@ -423,11 +386,20 @@ pub fn parse(data: &[u8]) {
         println!("  total bytes: 0x{:06x}", data_bytes + sys_bytes);
     }
 
-    let file_index = 0x6;
-    if let Ok(f) = get_file(&chunks, n_sys_chunks, &fat, vh.files, file_index) {
-        println!("  file {file_index:04} size: {}", f.len());
-        let mut file = File::create("intel.cfg").unwrap();
-        file.write_all(&f).unwrap();
-        // println!("{f:02x?}");
+    println!();
+    println!("chunks: {}, fat size: {}", chunks.len(), fat.len());
+
+    let files: Vec<(usize, &str)> = [(6, "intel.cfg"), (7, "fitc.cfg")].into();
+    for (file_index, file_name) in files {
+        match get_file(&chunks, n_sys_chunks, &fat, vh.files, file_index) {
+            Ok(f) => {
+                println!("file {file_index:04} {file_name} size: {}", f.len());
+                let mut file = File::create(file_name).unwrap();
+                file.write_all(&f).unwrap();
+            }
+            Err(e) => {
+                println!("file {file_index:04} {file_name}: {e}");
+            }
+        }
     }
 }

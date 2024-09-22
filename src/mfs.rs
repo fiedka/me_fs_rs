@@ -1,5 +1,5 @@
-use std::fs::File;
 use std::io::prelude::*;
+use std::{fs::File, str::from_utf8};
 
 use serde::{Deserialize, Serialize};
 use serde_big_array::BigArray;
@@ -89,6 +89,21 @@ pub struct VolHeader {
     pub chunk_bytes_total: u32,
     pub files: u16,
 }
+
+#[derive(FromBytes, FromZeroes, Serialize, Deserialize, Clone, Copy, Debug)]
+#[repr(C)]
+struct DirEntry {
+    file_index: u32,
+    mode: u16,
+    uid: u16,
+    gid: u16,
+    salt: u16,
+    name: [u8; 12],
+}
+
+const DIR_ENTRY_SIZE: usize = 24;
+const SZ: usize = std::mem::size_of::<DirEntry>();
+// assert_eq!(DIR_ENTRY_SIZE, SZ);
 
 /*
 data areas
@@ -289,6 +304,94 @@ fn print_files(chunks: &Chunks, n_sys_chunks: u16, fat: &[u16], n_files: u16) {
     }
 }
 
+const VFS_INTEGRITY: u16 = 0x0200;
+const VFS_ENCRYPTION: u16 = 0x0400;
+const VFS_ANTI_REPLAY: u16 = 0x0800;
+const VFS_NONINTEL: u16 = 0x2000;
+const VFS_DIRECTORY: u16 = 0x4000;
+
+const FILE_TYPE_XXX: u16 = 0;
+const FILE_TYPE_DIR: u16 = 1;
+
+fn get_blob<'a>(
+    chunks: &Chunks,
+    n_sys_chunks: u16,
+    fat: &[u16],
+    n_files: u16,
+    file_index: usize,
+) -> Result<Vec<u8>, &'a str> {
+    let salt = 0;
+    let mode = VFS_INTEGRITY | VFS_NONINTEL;
+    // TODO: Why & 0xfff ?
+    let fi = file_index & 0xfff;
+    let file_data = get_file(chunks, n_sys_chunks, fat, n_files, fi).unwrap();
+    let file_type = FILE_TYPE_DIR;
+
+    let size = file_data.len();
+    let rest = size % DIR_ENTRY_SIZE;
+    // assert_eq!(rest, 0);
+
+    let mut files = Vec::<DirEntry>::new();
+
+    for o in (0..size - rest).step_by(DIR_ENTRY_SIZE) {
+        let d = &file_data[o..o + DIR_ENTRY_SIZE];
+        let e = DirEntry::read_from_prefix(d).unwrap();
+        files.push(e);
+    }
+
+    for (i, f) in files.iter().enumerate() {
+        if let Ok(n) = from_utf8(&f.name) {
+            if i % 5 == 0 {
+                println!();
+            }
+            let n = n.trim_end_matches("\0");
+            let n = if n.is_empty() { "[no name]" } else { n };
+            let m = f.mode;
+            print!("  {n:12} {m:04x}");
+        }
+    }
+    println!();
+
+    for (i, f) in files.iter().enumerate() {
+        if let Ok(n) = from_utf8(&f.name) {
+            let n = n.trim_end_matches("\0");
+            if !n.is_empty() && f.mode & VFS_DIRECTORY > 0 {
+                println!();
+                println!("{n:12}");
+                let fi = f.file_index as usize;
+                if n == "." || n == ".." || n.starts_with(".") {
+                    continue;
+                }
+                match get_blob(chunks, n_sys_chunks, fat, n_files, fi) {
+                    Ok(_) => {}
+                    Err(e) => {
+                        println!("{e}");
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(Vec::<u8>::new())
+}
+
+fn get_dir(
+    chunks: &Chunks,
+    n_sys_chunks: u16,
+    fat: &[u16],
+    n_files: u16,
+    dir: &str,
+    file_index: usize,
+) {
+    println!("/{dir}:");
+    match get_blob(chunks, n_sys_chunks, fat, n_files, file_index) {
+        Ok(_) => {}
+        Err(e) => {
+            println!("{e}");
+        }
+    }
+}
+
 pub fn parse(data: &[u8]) {
     let size = data.len();
     let n_pages = size / PAGE_SIZE;
@@ -425,5 +528,8 @@ pub fn parse(data: &[u8]) {
     }
 
     // TODO: traverse directories
-    println!(" var fs: {:04x}", fat[8]);
+    if fat[8] != 0x0000 {
+        println!("var fs:");
+        get_dir(&chunks, n_sys_chunks, &fat, vh.files, "home", 0x10000008);
+    }
 }

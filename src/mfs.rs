@@ -113,6 +113,13 @@ struct BlobSec {
     nonce: [u8; 16],
 }
 
+#[derive(FromBytes, FromZeroes, Serialize, Deserialize, Clone, Copy, Debug)]
+#[repr(C)]
+struct RndCtr {
+    random: u32,
+    counter: u32,
+}
+
 /*
 data areas
 
@@ -318,10 +325,35 @@ const VFS_ANTI_REPLAY: u16 = 0x0800;
 const VFS_NONINTEL: u16 = 0x2000;
 const VFS_DIRECTORY: u16 = 0x4000;
 
-const FILE_TYPE_XXX: u16 = 0;
-const FILE_TYPE_DIR: u16 = 1;
-
 const SEC_SIZE: usize = 32 + 4 + 16;
+
+fn check_dir_sec(sec: &BlobSec) {
+    assert_eq!(sec.flags, 0x98);
+
+    let ar = sec.flags & 0b11;
+    let enc = (sec.flags >> 2) & 1;
+    let u7 = (sec.flags >> 3) & 0x7f;
+    let i_ar = (sec.flags >> 10) & 0x3ff;
+    let u12 = sec.flags >> 20;
+
+    assert_eq!(u7, 0x13);
+    assert_eq!(u12, enc << 1);
+
+    // I haven't seen this yet.
+    if i_ar > 0 {
+        let rnd_ctr = RndCtr::read_from_prefix(&sec.nonce);
+        println!("{rnd_ctr:#?}");
+    }
+
+    // I haven't seen this yet.
+    if enc > 0 {
+        println!("ENCRYPTED");
+    }
+
+    if ar == 0 && enc == 0 {
+        assert!(sec.nonce.eq(&[0u8; 16]));
+    }
+}
 
 fn get_blob<'a>(
     chunks: &Chunks,
@@ -336,7 +368,6 @@ fn get_blob<'a>(
     // TODO: Why & 0xfff ?
     let fi = file_index & 0xfff;
     let file_data = get_file(chunks, n_sys_chunks, fat, n_files, fi).unwrap();
-    let file_type = FILE_TYPE_DIR;
 
     let size = file_data.len();
     let list_size = size - SEC_SIZE;
@@ -344,7 +375,7 @@ fn get_blob<'a>(
     assert_eq!(rest, 0);
 
     let sec = BlobSec::read_from_prefix(&file_data[list_size..]).unwrap();
-    assert_eq!(sec.flags, 0x98);
+    check_dir_sec(&sec);
 
     let mut files = Vec::<DirEntry>::new();
     for o in (0..list_size).step_by(DIR_ENTRY_SIZE) {
@@ -357,20 +388,21 @@ fn get_blob<'a>(
         let m = f.mode;
         let fno = f.file_no;
         let fi = fno & 0xfff;
+        let ft = if f.mode & VFS_DIRECTORY > 0 { "d" } else { "f" };
         let n = &f.name[..2];
+        if i % 3 == 0 {
+            println!("  |");
+        }
         if let Ok(n) = from_utf8(n) {
             let n = n.split("\0").collect::<Vec<&str>>()[0];
             if n == "." || n == ".." {
-                print!("  |  {fi:04} {n:12} {m:04x}");
+                print!("  |  {fi:04} {n:12} {m:04x} {ft}");
                 continue;
             }
         }
         if let Ok(n) = from_utf8(&f.name) {
-            if i % 3 == 0 {
-                println!("  |");
-            }
             let n = n.split("\0").collect::<Vec<&str>>()[0];
-            print!("  |  {fi:04x} {n:12} {m:04x}");
+            print!("  |  {fi:04} {n:12} {m:04x} {ft}");
         }
     }
     println!("  |");
@@ -385,7 +417,7 @@ fn get_blob<'a>(
         }
         if let Ok(n) = from_utf8(&f.name) {
             let n = n.split("\0").collect::<Vec<&str>>()[0];
-            if !n.is_empty() && f.mode & VFS_DIRECTORY > 0 {
+            if f.mode & VFS_DIRECTORY > 0 {
                 println!();
                 let fi = f.file_no as usize;
                 let nd = format!("{dir}/{n}");
@@ -542,7 +574,9 @@ pub fn parse(data: &[u8]) {
         println!("    system: {n_sys_bytes}");
         println!("      data: {n_data_bytes}");
         println!();
-        print_files(&chunks, n_sys_chunks, &fat, vh.files);
+        if VERBOSE {
+            print_files(&chunks, n_sys_chunks, &fat, vh.files);
+        }
     }
 
     if DUMP_FILES {

@@ -340,7 +340,7 @@ fn check_dir_sec(sec: &BlobSec) {
     assert_eq!(u12, enc << 1);
 
     // I haven't seen this yet.
-    if i_ar > 0 {
+    if ar > 0 {
         let rnd_ctr = RndCtr::read_from_prefix(&sec.nonce);
         println!("{rnd_ctr:#?}");
     }

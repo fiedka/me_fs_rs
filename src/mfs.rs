@@ -10,7 +10,7 @@ use zerocopy::FromBytes;
 use zerocopy_derive::{FromBytes, FromZeroes};
 
 const PRINT: bool = true;
-const DUMP_FILES: bool = true;
+const DUMP_FILES: bool = false;
 
 const DEBUG_FAT: bool = false;
 const VERBOSE: bool = false;
@@ -335,8 +335,11 @@ fn check_dir_sec(sec: &BlobSec) {
 
     let ar = sec.flags & 0b11;
     let enc = (sec.flags >> 2) & 1;
+    // NOTE: This is 7 unknown bits and the lowest one wasn't set in the Python
+    // implementation from PT.
     let u7 = (sec.flags >> 3) & 0x7f;
     let i_ar = (sec.flags >> 10) & 0x3ff;
+    // NOTE: This is 12 unknown bits.
     let u12 = sec.flags >> 20;
 
     assert_eq!(u7, 0x13);
@@ -366,7 +369,9 @@ fn get_blob<'a>(
     path: &Path,
     file_index: usize,
 ) -> Result<Vec<u8>, &'a str> {
+    // TODO
     let salt = 0;
+    // TODO: Needs to be passed.
     let mode = VFS_INTEGRITY | VFS_NONINTEL;
     // TODO: Why & 0xfff ?
     let fi = file_index & 0xfff;
@@ -377,8 +382,10 @@ fn get_blob<'a>(
     let rest = list_size % DIR_ENTRY_SIZE;
     assert_eq!(rest, 0);
 
-    let sec = BlobSec::read_from_prefix(&file_data[list_size..]).unwrap();
-    check_dir_sec(&sec);
+    if mode & VFS_INTEGRITY > 0 {
+        let sec = BlobSec::read_from_prefix(&file_data[list_size..]).unwrap();
+        check_dir_sec(&sec);
+    }
 
     let mut files = Vec::<DirEntry>::new();
     for o in (0..list_size).step_by(DIR_ENTRY_SIZE) {
@@ -393,22 +400,28 @@ fn get_blob<'a>(
         let fi = fno & 0xfff;
         let ft = if f.mode & VFS_DIRECTORY > 0 { "d" } else { "f" };
         let n = &f.name[..2];
-        if i % 3 == 0 {
+        if PRINT && i % 3 == 0 {
             println!("  |");
         }
         if let Ok(n) = from_utf8(n) {
             let n = n.split("\0").collect::<Vec<&str>>()[0];
             if n == "." || n == ".." {
-                print!("  |  {fi:04} {n:12} {m:04x} {ft}");
+                if PRINT {
+                    print!("  |  {fi:04} {n:12} {m:04x} {ft}");
+                }
                 continue;
             }
         }
-        if let Ok(n) = from_utf8(&f.name) {
-            let n = n.split("\0").collect::<Vec<&str>>()[0];
-            print!("  |  {fi:04} {n:12} {m:04x} {ft}");
+        if PRINT {
+            if let Ok(n) = from_utf8(&f.name) {
+                let n = n.split("\0").collect::<Vec<&str>>()[0];
+                print!("  |  {fi:04} {n:12} {m:04x} {ft}");
+            }
         }
     }
-    println!("  |");
+    if PRINT {
+        println!("  |");
+    }
 
     for (i, f) in files.iter().enumerate() {
         let n = &f.name[..2];
@@ -423,7 +436,9 @@ fn get_blob<'a>(
             let fi = f.file_no as usize & 0xfff;
             let next_path = path.join(Path::new(n));
             if f.mode & VFS_DIRECTORY > 0 {
-                println!();
+                if PRINT {
+                    println!();
+                }
                 walk_dir(chunks, n_sys_chunks, fat, n_files, &next_path, fi);
             } else if DUMP_FILES {
                 create_dir_all(path).unwrap();
@@ -446,7 +461,9 @@ fn walk_dir(
     path: &Path,
     file_index: usize,
 ) {
-    println!("/{:?}:", path.as_os_str());
+    if PRINT {
+        println!("/{}:", path.display());
+    }
     match get_blob(chunks, n_sys_chunks, fat, n_files, path, file_index) {
         Ok(_) => {}
         Err(e) => {
@@ -594,7 +611,9 @@ pub fn parse(data: &[u8]) {
 
     // traverse directories
     if fat[8] != 0x0000 {
-        println!("var fs:");
+        if PRINT {
+            println!("var fs:");
+        }
         let home_dir = Path::new("home");
         walk_dir(&chunks, n_sys_chunks, &fat, vh.files, home_dir, 0x10000008);
     }

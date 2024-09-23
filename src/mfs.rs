@@ -1,5 +1,7 @@
+use std::fs::{create_dir_all, File};
 use std::io::prelude::*;
-use std::{fs::File, str::from_utf8};
+use std::path::Path;
+use std::str::from_utf8;
 
 use serde::{Deserialize, Serialize};
 use serde_big_array::BigArray;
@@ -8,8 +10,9 @@ use zerocopy::FromBytes;
 use zerocopy_derive::{FromBytes, FromZeroes};
 
 const PRINT: bool = true;
+const DUMP_FILES: bool = true;
+
 const DEBUG_FAT: bool = false;
-const DUMP_FILES: bool = false;
 const VERBOSE: bool = false;
 
 // see https://live.ructf.org/intel_me.pdf slide 35
@@ -360,7 +363,7 @@ fn get_blob<'a>(
     n_sys_chunks: u16,
     fat: &[u16],
     n_files: u16,
-    dir: &str,
+    path: &Path,
     file_index: usize,
 ) -> Result<Vec<u8>, &'a str> {
     let salt = 0;
@@ -417,11 +420,17 @@ fn get_blob<'a>(
         }
         if let Ok(n) = from_utf8(&f.name) {
             let n = n.split("\0").collect::<Vec<&str>>()[0];
+            let fi = f.file_no as usize & 0xfff;
+            let next_path = path.join(Path::new(n));
             if f.mode & VFS_DIRECTORY > 0 {
                 println!();
-                let fi = f.file_no as usize;
-                let nd = format!("{dir}/{n}");
-                get_dir(chunks, n_sys_chunks, fat, n_files, &nd, fi);
+                walk_dir(chunks, n_sys_chunks, fat, n_files, &next_path, fi);
+            } else if DUMP_FILES {
+                create_dir_all(path).unwrap();
+                let mut file = File::create(next_path).unwrap();
+                if let Ok(d) = get_file(chunks, n_sys_chunks, fat, n_files, fi) {
+                    file.write_all(&d).unwrap();
+                }
             }
         }
     }
@@ -429,16 +438,16 @@ fn get_blob<'a>(
     Ok(Vec::<u8>::new())
 }
 
-fn get_dir(
+fn walk_dir(
     chunks: &Chunks,
     n_sys_chunks: u16,
     fat: &[u16],
     n_files: u16,
-    dir: &str,
+    path: &Path,
     file_index: usize,
 ) {
-    println!("/{dir}:");
-    match get_blob(chunks, n_sys_chunks, fat, n_files, dir, file_index) {
+    println!("/{:?}:", path.as_os_str());
+    match get_blob(chunks, n_sys_chunks, fat, n_files, path, file_index) {
         Ok(_) => {}
         Err(e) => {
             println!("{e}");
@@ -583,9 +592,10 @@ pub fn parse(data: &[u8]) {
         dump_files(&chunks, n_sys_chunks, &fat, vh.files);
     }
 
-    // TODO: traverse directories
+    // traverse directories
     if fat[8] != 0x0000 {
         println!("var fs:");
-        get_dir(&chunks, n_sys_chunks, &fat, vh.files, "home", 0x10000008);
+        let home_dir = Path::new("home");
+        walk_dir(&chunks, n_sys_chunks, &fat, vh.files, home_dir, 0x10000008);
     }
 }

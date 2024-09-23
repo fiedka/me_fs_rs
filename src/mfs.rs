@@ -93,7 +93,7 @@ pub struct VolHeader {
 #[derive(FromBytes, FromZeroes, Serialize, Deserialize, Clone, Copy, Debug)]
 #[repr(C)]
 struct DirEntry {
-    file_index: u32,
+    file_no: u32,
     mode: u16,
     uid: u16,
     gid: u16,
@@ -355,37 +355,39 @@ fn get_blob<'a>(
 
     for (i, f) in files.iter().enumerate() {
         let m = f.mode;
+        let fno = f.file_no;
+        let fi = fno & 0xfff;
         let n = &f.name[..2];
         if let Ok(n) = from_utf8(n) {
-            let n = n.trim_end_matches("\0");
+            let n = n.split("\0").collect::<Vec<&str>>()[0];
             if n == "." || n == ".." {
-                print!("  {n:12} {m:04x}");
+                print!("  |  {fi:04} {n:12} {m:04x}");
                 continue;
             }
         }
         if let Ok(n) = from_utf8(&f.name) {
-            if i % 5 == 0 {
-                println!();
+            if i % 3 == 0 {
+                println!("  |");
             }
-            let n = n.trim_end_matches("\0");
-            print!("  {n:12} {m:04x}");
+            let n = n.split("\0").collect::<Vec<&str>>()[0];
+            print!("  |  {fi:04x} {n:12} {m:04x}");
         }
     }
-    println!();
+    println!("  |");
 
     for (i, f) in files.iter().enumerate() {
         let n = &f.name[..2];
         if let Ok(n) = from_utf8(n) {
-            let n = n.trim_end_matches("\0");
+            let n = n.split("\0").collect::<Vec<&str>>()[0];
             if n == "." || n == ".." {
                 continue;
             }
         }
         if let Ok(n) = from_utf8(&f.name) {
-            let n = n.trim_end_matches("\0");
+            let n = n.split("\0").collect::<Vec<&str>>()[0];
             if !n.is_empty() && f.mode & VFS_DIRECTORY > 0 {
                 println!();
-                let fi = f.file_index as usize;
+                let fi = f.file_no as usize;
                 let nd = format!("{dir}/{n}");
                 get_dir(chunks, n_sys_chunks, fat, n_files, &nd, fi);
             }

@@ -12,8 +12,8 @@ use zerocopy_derive::{FromBytes, FromZeroes};
 const PRINT: bool = true;
 const DUMP_FILES: bool = false;
 
-const DEBUG_FAT: bool = false;
-const VERBOSE: bool = false;
+const DEBUG_FAT: bool = true;
+const VERBOSE: bool = true;
 
 // see https://live.ructf.org/intel_me.pdf slide 35
 const PAGE_MAGIC: u32 = 0xaa55_7887;
@@ -105,8 +105,6 @@ struct DirEntry {
 }
 
 const DIR_ENTRY_SIZE: usize = 24;
-// const SZ: usize = std::mem::size_of::<DirEntry>();
-// assert_eq!(DIR_ENTRY_SIZE, SZ);
 
 #[derive(FromBytes, FromZeroes, Serialize, Deserialize, Clone, Copy, Debug)]
 #[repr(C)]
@@ -195,7 +193,7 @@ fn parse_data_chunks(data: &[u8], first_chunk: u16) -> (Chunks, usize) {
     (chunks, free_chunks)
 }
 
-fn parse_sys_chunks(data: &[u8]) -> (Chunks, usize, usize) {
+fn parse_sys_chunks(data: &[u8]) -> Result<(Chunks, usize, usize), String> {
     let mut dup_chunks = 0;
     let mut free_chunks = 0;
     let mut chunks = Chunks::new();
@@ -229,7 +227,12 @@ fn parse_sys_chunks(data: &[u8]) -> (Chunks, usize, usize) {
         dd.extend_from_slice(&chunk_index.to_le_bytes());
         let cs = CCITT.checksum(&dd);
 
-        assert_eq!(cs, c.crc16);
+        if cs != c.crc16 {
+            return Err(format!(
+                "chunk {chunk_pos} checksum {cs:04x} does not match expected checksum {:04x}",
+                c.crc16
+            ));
+        }
         // XXX: In reality, chunk index is not unique, so it's not the "index"?
         if chunks.contains_key(&chunk_index) {
             dup_chunks += 1;
@@ -239,30 +242,35 @@ fn parse_sys_chunks(data: &[u8]) -> (Chunks, usize, usize) {
         }
         chunks.insert(chunk_index, c);
     }
-    (chunks, free_chunks, dup_chunks)
+    Ok((chunks, free_chunks, dup_chunks))
 }
 
-fn get_file<'a>(
+const FILE_NONE: u16 = 0x0000;
+const FILE_EMPTY: u16 = 0xffff;
+
+fn get_file(
     chunks: &Chunks,
     n_sys_chunks: u16,
     fat: &[u16],
     n_files: u16,
-    file_index: usize,
-) -> Result<Vec<u8>, &'a str> {
-    let mut i_node = fat[file_index];
-    if VERBOSE {
+    file_index: u32,
+) -> Result<Vec<u8>, String> {
+    let mut i_node = fat[file_index as usize];
+    if VERBOSE && i_node != FILE_EMPTY && i_node != FILE_NONE {
         println!("  file {file_index:04} iNode {i_node:04x}");
     }
-    if i_node == 0xffff {
-        return Err("empty file");
+    if i_node == FILE_EMPTY {
+        return Err("empty".to_string());
     }
-    if i_node == 0x0000 {
-        return Err("no file");
+    if i_node == FILE_NONE {
+        return Err("no file".to_string());
     }
 
     let mut data = Vec::<u8>::new();
     loop {
-        assert!(i_node >= n_files);
+        if i_node < n_files {
+            return Err(format!("inode {i_node} less than file count {n_files}"));
+        }
         let ci = i_node + n_sys_chunks - n_files;
         let c = chunks[&ci];
         i_node = fat[i_node as usize];
@@ -295,7 +303,7 @@ fn dump_u16(a: &[u16]) {
 fn dump_files(chunks: &Chunks, n_sys_chunks: u16, fat: &[u16], n_files: u16) {
     let files: Vec<(usize, &str)> = [(6, "intel.cfg"), (7, "fitc.cfg")].into();
     for (file_index, file_name) in files {
-        match get_file(chunks, n_sys_chunks, fat, n_files, file_index) {
+        match get_file(chunks, n_sys_chunks, fat, n_files, file_index as u32) {
             Ok(f) => {
                 println!("file {file_index:04} {file_name}: {:5} bytes", f.len());
                 let mut file = File::create(file_name).unwrap();
@@ -310,10 +318,14 @@ fn dump_files(chunks: &Chunks, n_sys_chunks: u16, fat: &[u16], n_files: u16) {
 
 fn print_files(chunks: &Chunks, n_sys_chunks: u16, fat: &[u16], n_files: u16) {
     println!(" files: {n_files}");
-    for file_index in 0..n_files as usize {
+    for file_index in 0..n_files as u32 {
         match get_file(chunks, n_sys_chunks, fat, n_files, file_index) {
             Ok(f) => {
                 println!("    {file_index:04}: {:5} bytes", f.len());
+                let l_size = f.len() - SEC_SIZE;
+                if l_size % DIR_ENTRY_SIZE == 0 {
+                    println!("  may be a dir");
+                }
             }
             Err(e) => {
                 println!("    {file_index:04}: {e}");
@@ -323,27 +335,46 @@ fn print_files(chunks: &Chunks, n_sys_chunks: u16, fat: &[u16], n_files: u16) {
 }
 
 const VFS_INTEGRITY: u16 = 0x0200;
-const VFS_ENCRYPTION: u16 = 0x0400;
-const VFS_ANTI_REPLAY: u16 = 0x0800;
+// const VFS_ENCRYPTION: u16 = 0x0400;
+// const VFS_ANTI_REPLAY: u16 = 0x0800;
 const VFS_NONINTEL: u16 = 0x2000;
 const VFS_DIRECTORY: u16 = 0x4000;
 
 const SEC_SIZE: usize = 32 + 4 + 16;
 
-fn check_dir_sec(sec: &BlobSec) {
-    assert_eq!(sec.flags, 0x98);
+const OLD_FLAGS: u32 = 0x90;
+// const NEW_FLAGS: u32 = 0x98;
 
+// TODO: use crate for bits
+// XXX: ThinkPad X270 and T480 match NEW_FLAGS, ASRock Z170M matches OLD_FLAGS.
+fn check_dir_sec(sec: &BlobSec) -> Result<(), String> {
+    let expected_flags = OLD_FLAGS;
+    if false {
+        let flags = sec.flags;
+        if flags != expected_flags {
+            return Err(format!(
+                "flags {flags:032b} do not match {expected_flags:032b}"
+            ));
+        }
+    }
     let ar = sec.flags & 0b11;
     let enc = (sec.flags >> 2) & 1;
-    // NOTE: This is 7 unknown bits and the lowest one wasn't set in the Python
-    // implementation from PT.
+    // let i_ar = (sec.flags >> 10) & 0x3ff;
+
+    // NOTE: This is 7 unknown bits; what do they mean?
+    // XXX: The lowest bit isn't set in PT's Python implementation.
+    // See OLD_FLAGS vs NEW_FLAGS.
     let u7 = (sec.flags >> 3) & 0x7f;
-    let i_ar = (sec.flags >> 10) & 0x3ff;
+    let expected_u7 = expected_flags >> 3;
+    // XXX: equivalent to first check
+    if u7 != expected_u7 {
+        // return Err(format!("flags 3..10 {u7:b} not matching {expected_u7:b}"));
+    }
     // NOTE: This is 12 unknown bits.
     let u12 = sec.flags >> 20;
-
-    assert_eq!(u7, 0x13);
-    assert_eq!(u12, enc << 1);
+    if u12 != enc << 1 {
+        return Err(format!("flags 20..31 {u12:b} not matching {enc:b}"));
+    }
 
     // I haven't seen this yet.
     if ar > 0 {
@@ -357,34 +388,47 @@ fn check_dir_sec(sec: &BlobSec) {
     }
 
     if ar == 0 && enc == 0 {
-        assert!(sec.nonce.eq(&[0u8; 16]));
+        let nonce = sec.nonce;
+        if !nonce.eq(&[0u8; 16]) {
+            return Err(format!("nonce {nonce:04x?} not all zero"));
+        }
     }
+
+    Ok(())
 }
 
-fn get_blob<'a>(
+// TODO: Why 0xfff ?
+const FILE_INDEX_MASK: u32 = 0xfff;
+
+fn get_blob(
     chunks: &Chunks,
     n_sys_chunks: u16,
     fat: &[u16],
     n_files: u16,
     path: &Path,
-    file_index: usize,
-) -> Result<Vec<u8>, &'a str> {
+    file_index: u32,
+) -> Result<Vec<u8>, String> {
     // TODO
-    let salt = 0;
+    // let salt = 0;
     // TODO: Needs to be passed.
     let mode = VFS_INTEGRITY | VFS_NONINTEL;
-    // TODO: Why & 0xfff ?
-    let fi = file_index & 0xfff;
-    let file_data = get_file(chunks, n_sys_chunks, fat, n_files, fi).unwrap();
+    let fi = file_index & FILE_INDEX_MASK;
+    let file_data = get_file(chunks, n_sys_chunks, fat, n_files, fi)?;
 
+    // must be n * DIR_ENTRY_SIZE + SEC_SIZE
     let size = file_data.len();
-    let list_size = size - SEC_SIZE;
+    let list_size = size - SEC_SIZE; // 72
     let rest = list_size % DIR_ENTRY_SIZE;
-    assert_eq!(rest, 0);
+    if rest != 0 {
+        println!("{size} {:#02x?}", &file_data[..24]);
+        return Err(format!(
+            "directory listing for file {fi} has leftover bytes"
+        ));
+    }
 
     if mode & VFS_INTEGRITY > 0 {
         let sec = BlobSec::read_from_prefix(&file_data[list_size..]).unwrap();
-        check_dir_sec(&sec);
+        check_dir_sec(&sec)?;
     }
 
     let mut files = Vec::<DirEntry>::new();
@@ -397,7 +441,7 @@ fn get_blob<'a>(
     for (i, f) in files.iter().enumerate() {
         let m = f.mode;
         let fno = f.file_no;
-        let fi = fno & 0xfff;
+        let fi = fno & FILE_INDEX_MASK;
         let ft = if f.mode & VFS_DIRECTORY > 0 { "d" } else { "f" };
         let n = &f.name[..2];
         if PRINT && i % 3 == 0 {
@@ -416,6 +460,8 @@ fn get_blob<'a>(
             if let Ok(n) = from_utf8(&f.name) {
                 let n = n.split("\0").collect::<Vec<&str>>()[0];
                 print!("  |  {fi:04} {n:12} {m:04x} {ft}");
+            } else {
+                print!("  |  {fi:04} [>unknown<]  {m:04x} {ft}");
             }
         }
     }
@@ -433,7 +479,7 @@ fn get_blob<'a>(
         }
         if let Ok(n) = from_utf8(&f.name) {
             let n = n.split("\0").collect::<Vec<&str>>()[0];
-            let fi = f.file_no as usize & 0xfff;
+            let fi = f.file_no & FILE_INDEX_MASK;
             let next_path = path.join(Path::new(n));
             if f.mode & VFS_DIRECTORY > 0 {
                 if PRINT {
@@ -443,9 +489,17 @@ fn get_blob<'a>(
             } else if DUMP_FILES {
                 create_dir_all(path).unwrap();
                 let mut file = File::create(next_path).unwrap();
-                if let Ok(d) = get_file(chunks, n_sys_chunks, fat, n_files, fi) {
-                    file.write_all(&d).unwrap();
-                }
+                let d = get_file(chunks, n_sys_chunks, fat, n_files, fi)?;
+                file.write_all(&d).unwrap();
+            }
+        } else {
+            let fi = f.file_no & FILE_INDEX_MASK;
+            let i_node = fat[fi as usize];
+            let next_path = path.join(Path::new("xxx"));
+            if false && f.mode & VFS_DIRECTORY > 0 && i_node != FILE_NONE && i_node != FILE_EMPTY {
+                walk_dir(chunks, n_sys_chunks, fat, n_files, &next_path, fi);
+            } else {
+                println!("NOT A VALID DIR");
             }
         }
     }
@@ -453,13 +507,14 @@ fn get_blob<'a>(
     Ok(Vec::<u8>::new())
 }
 
+// TODO: expose error once we figure things out...
 fn walk_dir(
     chunks: &Chunks,
     n_sys_chunks: u16,
     fat: &[u16],
     n_files: u16,
     path: &Path,
-    file_index: usize,
+    file_index: u32,
 ) {
     if PRINT {
         println!("/{}:", path.display());
@@ -472,7 +527,7 @@ fn walk_dir(
     }
 }
 
-pub fn parse(data: &[u8]) {
+pub fn parse(data: &[u8]) -> Result<bool, String> {
     let size = data.len();
     let n_pages = size / PAGE_SIZE;
     let n_sys_pages = n_pages / 12;
@@ -504,7 +559,7 @@ pub fn parse(data: &[u8]) {
                     chunks,
                 });
             } else {
-                let (chunks, free, dups) = parse_sys_chunks(slice);
+                let (chunks, free, dups) = parse_sys_chunks(slice)?;
                 let l = chunks.len();
                 if VERBOSE {
                     println!("sys page @ 0x{pos:06x}: usn {:02x?}", header.usn);
@@ -518,7 +573,9 @@ pub fn parse(data: &[u8]) {
             }
         } else {
             // this should occur exactly once
-            assert_eq!(blank_page, 0);
+            if blank_page != 0 {
+                return Err("more than one blank page found".to_string());
+            };
             blank_page = pos;
         }
     }
@@ -528,21 +585,35 @@ pub fn parse(data: &[u8]) {
 
     // NOTE: The chunks have indices and are not sorted upfront.
     // The first data chunk index must be less than the last system chunk.
-    let n_sys_chunks = data_pages.first().unwrap().header.first_chunk;
+    let first_page = data_pages.first().ok_or("no data pages")?;
+    let n_sys_chunks = first_page.header.first_chunk;
 
     let mut chunks = Chunks::new();
     for p in sys_pages {
         for (i, c) in p.chunks {
-            assert!(i < n_sys_chunks);
+            if i >= n_sys_chunks {
+                return Err(format!(
+                    "system chunk {i} outside its boundary {n_sys_chunks}",
+                ));
+            }
             chunks.insert(i, c);
         }
     }
     for (pi, p) in data_pages.iter().enumerate() {
         let first_chunk_expected = n_sys_chunks as usize + pi * DATA_PAGE_CHUNKS;
-        assert_eq!(p.header.first_chunk as usize, first_chunk_expected);
+        let fc = p.header.first_chunk as usize;
+        if fc != first_chunk_expected {
+            return Err(format!(
+                "first chunk ID in data page {pi} is {fc}, expected {first_chunk_expected}",
+            ));
+        }
         for (ci, c) in &p.chunks {
             // duplicates are not allowed
-            assert!(!chunks.contains_key(ci));
+            if chunks.contains_key(ci) {
+                return Err(format!(
+                    "duplicate chunk ID {ci} encountered in data page {pi}"
+                ));
+            }
             chunks.insert(*ci, *c);
         }
     }
@@ -550,7 +621,11 @@ pub fn parse(data: &[u8]) {
     // The first chunk is the start of the volume, so check magic at beginning.
     let c0 = chunks[&0].data;
     let magic = u32::read_from_prefix(&c0).unwrap();
-    assert_eq!(magic, VOL_MAGIC);
+    if magic != VOL_MAGIC {
+        return Err(format!(
+            "first bytes of volume {magic:08x} do not match magic {VOL_MAGIC:08x}"
+        ));
+    }
     let vh = VolHeader::read_from_prefix(&c0).unwrap();
 
     // NOTE: Not all system chunks are really set.
@@ -610,11 +685,29 @@ pub fn parse(data: &[u8]) {
     }
 
     // traverse directories
-    if fat[8] != 0x0000 {
+    if fat[8] != FILE_NONE {
         if PRINT {
             println!("var fs:");
         }
         let home_dir = Path::new("home");
-        walk_dir(&chunks, n_sys_chunks, &fat, vh.files, home_dir, 0x10000008);
+        if true {
+            walk_dir(&chunks, n_sys_chunks, &fat, vh.files, home_dir, 0x10000008);
+        }
+        if false {
+            // XXX: has files `ntid3` (data) and `uncfg` (empty)
+            walk_dir(&chunks, n_sys_chunks, &fat, vh.files, home_dir, 114);
+            // XXX: `PttProf` (data), `eyCache4wP` (dir), `RsaKeyCache5` (empty)
+            // Should likely be RsaKeyCache1,2,3,4,5,6,7,8,9,10
+            walk_dir(&chunks, n_sys_chunks, &fat, vh.files, home_dir, 133);
+            // XXX: _k_m0 (dir), widi_k_m1 (file), widi_k_m7 (file), wv_keybox
+            walk_dir(&chunks, n_sys_chunks, &fat, vh.files, home_dir, 81);
+            // XXX: sec_touch (empty)
+            walk_dir(&chunks, n_sys_chunks, &fat, vh.files, home_dir, 53);
+        }
+        if false {
+            walk_dir(&chunks, n_sys_chunks, &fat, vh.files, home_dir, 28);
+        }
     }
+
+    Ok(true)
 }

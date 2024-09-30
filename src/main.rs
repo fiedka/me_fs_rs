@@ -20,13 +20,13 @@ struct Args {
     file: String,
 }
 
-fn print_directories(cpds: &Vec<CodePartitionDirectory>) {
-    for cpd in cpds {
+fn print_directories(cpds: &Vec<(String, CodePartitionDirectory)>) {
+    for c in cpds {
         println!();
+        let (name, cpd) = c;
         let CodePartitionDirectory { header, entries } = cpd;
-        let pname = std::str::from_utf8(&header.part_name).unwrap();
         let checksum = header.version_or_checksum;
-        println!("{pname}  checksum or version: {checksum:08x}");
+        println!("{name}  checksum or version: {checksum:08x}");
         println!("  file name        offset    end       size           compression flags");
         let mut entries = entries.clone();
         entries.sort_by_key(|e| e.offset & 0xffffff);
@@ -80,12 +80,16 @@ fn main() -> io::Result<()> {
                 entries,
                 directories,
             } = fpt;
-            if args.print || args.verbose {
-                println!("\nFound at 0x{base:08x}: {header:#0x?}");
-            }
             if args.verbose {
+                println!("\nFound at 0x{base:08x}: {header:#0x?}");
+            } else if args.print {
+                println!("\nFound at 0x{base:08x}: Version {}", header.header_ver);
+            }
+            if args.print || args.verbose {
                 println!("\nPartitions:");
                 print_fpt_entries(&entries);
+            }
+            if args.verbose {
                 println!("\nDirectories:");
                 print_directories(&directories);
             }

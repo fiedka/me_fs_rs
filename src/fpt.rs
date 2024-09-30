@@ -52,7 +52,7 @@ pub struct ME_FPT {
     pub base: usize,
     pub header: FPT,
     pub entries: Vec<FPTEntry>,
-    pub directories: Vec<crate::cpd::CodePartitionDirectory>,
+    pub directories: Vec<(String, crate::cpd::CodePartitionDirectory)>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

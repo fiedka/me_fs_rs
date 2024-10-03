@@ -30,12 +30,17 @@ pub struct CodePartitionDirectory {
     pub entries: Vec<CPDEntry>,
 }
 
+// TODO: See https://github.com/skochinsky/me-tools class CPDEntry
+// What is the other u8?!
+const OFFSET_MASK: u32 = 0xffffff;
+
 pub fn parse_cpd(data: &[u8]) -> Result<CodePartitionDirectory, String> {
     let header = CPDHeader::read_from_prefix(data).unwrap();
     let mut entries = Vec::<CPDEntry>::new();
     for e in 0..header.entries as usize {
         let pos = 16 + e * 24;
-        let entry = CPDEntry::read_from_prefix(&data[pos..]).unwrap();
+        let mut entry = CPDEntry::read_from_prefix(&data[pos..]).unwrap();
+        entry.offset &= OFFSET_MASK;
         entries.push(entry);
     }
     let cpd = CodePartitionDirectory { header, entries };

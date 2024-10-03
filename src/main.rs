@@ -29,11 +29,9 @@ fn print_directories(cpds: &Vec<(String, CodePartitionDirectory)>) {
         println!("{name}  checksum or version: {checksum:08x}");
         println!("  file name        offset    end       size           compression flags");
         let mut entries = entries.clone();
-        entries.sort_by_key(|e| e.offset & 0xffffff);
+        entries.sort_by_key(|e| e.offset);
         for e in entries {
-            // TODO: See https://github.com/skochinsky/me-tools class CPDEntry
-            // What is the other u8?!
-            let o = e.offset & 0xffffff;
+            let o = e.offset;
             let s = e.size;
             let end = o + s;
             let f = e.compression_flag;

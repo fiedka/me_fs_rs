@@ -25,24 +25,50 @@ pub struct CPDEntry {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[repr(C)]
-pub struct CodePartitionDirectory {
+pub struct CodePartitionDirectory<'a> {
     pub header: CPDHeader,
     pub entries: Vec<CPDEntry>,
+    pub offset: usize,
+    pub name: String,
+    pub data: &'a [u8],
 }
 
 // TODO: See https://github.com/skochinsky/me-tools class CPDEntry
 // What is the other u8?!
 const OFFSET_MASK: u32 = 0xffffff;
 
-pub fn parse_cpd(data: &[u8]) -> Result<CodePartitionDirectory, String> {
-    let header = CPDHeader::read_from_prefix(data).unwrap();
-    let mut entries = Vec::<CPDEntry>::new();
-    for e in 0..header.entries as usize {
-        let pos = 16 + e * 24;
-        let mut entry = CPDEntry::read_from_prefix(&data[pos..]).unwrap();
-        entry.offset &= OFFSET_MASK;
-        entries.push(entry);
+impl<'a> CodePartitionDirectory<'a> {
+    pub fn new(data: &'a [u8], offset: usize) -> Result<Self, String> {
+        let header = CPDHeader::read_from_prefix(data).unwrap();
+        let n = header.part_name;
+        let name = std::str::from_utf8(&n).unwrap();
+        // some names are shorter than 4 bytes and padded with 0x0
+        let name = name.trim_end_matches(char::from(0));
+        let mut entries = Vec::<CPDEntry>::new();
+        for e in 0..header.entries as usize {
+            let pos = 16 + e * 24;
+            let mut entry = CPDEntry::read_from_prefix(&data[pos..]).unwrap();
+            entry.offset &= OFFSET_MASK;
+            entries.push(entry);
+        }
+        let cpd = CodePartitionDirectory {
+            header,
+            entries,
+            offset,
+            name: name.to_string(),
+            data,
+        };
+        Ok(cpd)
     }
-    let cpd = CodePartitionDirectory { header, entries };
-    Ok(cpd)
+
+    pub fn manifest(&self) -> Result<crate::man::Manifest, String> {
+        let entries = &mut self.entries.iter();
+        let n = format!("{}.man", self.name);
+        if let Some(e) = entries.find(|e| e.name.starts_with(n.as_bytes())) {
+            let b = &self.data[e.offset as usize..];
+            crate::man::Manifest::new(b)
+        } else {
+            Err("no manifest found".to_string())
+        }
+    }
 }

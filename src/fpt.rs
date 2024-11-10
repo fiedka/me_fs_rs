@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use zerocopy_derive::{AsBytes, FromBytes, FromZeroes};
 
+use crate::cpd::CodePartitionDirectory;
+
 // see https://github.com/peterbjornx/meimagetool ...intelme/model/fpt/ (Java)
 // and https://github.com/linuxboot/fiano/blob/main/pkg/intel/me/structures.go
 // and https://github.com/platomav/MEAnalyzer (Python, good luck)
@@ -47,12 +49,12 @@ pub struct FPT {
 }
 
 #[allow(non_camel_case_types)]
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct ME_FPT {
+#[derive(Serialize, Clone, Debug)]
+pub struct ME_FPT<'a> {
     pub base: usize,
     pub header: FPT,
     pub entries: Vec<FPTEntry>,
-    pub directories: Vec<(String, crate::cpd::CodePartitionDirectory)>,
+    pub directories: Vec<CodePartitionDirectory<'a>>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

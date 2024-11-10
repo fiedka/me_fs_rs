@@ -20,15 +20,20 @@ struct Args {
     file: String,
 }
 
-fn print_directories(cpds: &Vec<(String, CodePartitionDirectory)>) {
-    for c in cpds {
+fn print_directories(dirs: &Vec<CodePartitionDirectory>, data: &[u8]) {
+    for d in dirs {
         println!();
-        let (name, cpd) = c;
-        let CodePartitionDirectory { header, entries } = cpd;
-        let checksum = header.version_or_checksum;
-        println!("{name}  checksum or version: {checksum:08x}");
+        let checksum = d.header.version_or_checksum;
+        println!("{} checksum or version: {checksum:08x}", d.name);
+        let o = d.offset;
+        let manifest_name = format!("{}.man", d.name);
+        match d.manifest() {
+            Ok(m) => println!("{m}"),
+            Err(e) => println!("{e}"),
+        }
+
         println!("  file name        offset    end       size           compression flags");
-        let mut entries = entries.clone();
+        let mut entries = d.entries.clone();
         entries.sort_by_key(|e| e.offset);
         for e in entries {
             let o = e.offset;
@@ -89,7 +94,7 @@ fn main() -> io::Result<()> {
             }
             if args.verbose {
                 println!("\nDirectories:");
-                print_directories(&directories);
+                print_directories(&directories, &data);
             }
         }
         Err(e) => {

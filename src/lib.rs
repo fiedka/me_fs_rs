@@ -1,11 +1,16 @@
+use serde::Serialize;
 use std::mem;
 use zerocopy::FromBytes;
 
 pub mod cpd;
+pub mod fit;
 pub mod fpt;
+pub mod man;
 pub mod mfs;
 
 pub use fpt::ME_FPT;
+
+const PARSE_MFS: bool = false;
 
 const FTUP: u32 = u32::from_be_bytes(*b"FTUP");
 const DLMP: u32 = u32::from_be_bytes(*b"DLMP");
@@ -15,30 +20,50 @@ const NFTP: u32 = u32::from_be_bytes(*b"NFTP");
 const MFS: u32 = u32::from_be_bytes(*b"MFS\0");
 const AFSP: u32 = u32::from_be_bytes(*b"AFSP");
 
+fn dump48(data: &[u8]) {
+    println!("Here are the first 48 bytes:");
+    let b = &data[0..0x10];
+    println!("{b:02x?}");
+    let b = &data[0x10..0x20];
+    println!("{b:02x?}");
+    let b = &data[0x20..0x30];
+    println!("{b:02x?}");
+}
+
 pub fn parse(data: &[u8]) -> Result<ME_FPT, String> {
+    let debug = false;
+
+    println!();
+    match fit::Fit::new(data) {
+        Ok(fit) => {
+            println!("{:02x?}", fit.header);
+            for e in fit.entries {
+                println!("{e}");
+            }
+        }
+        Err(e) => {
+            println!("Could not parse FIT: {e}");
+        }
+    }
+    println!();
+
     let cpd_bytes = cpd::CPD_MAGIC.as_bytes();
     let mut entries = Vec::<fpt::FPTEntry>::new();
-    let mut directories = Vec::<(String, cpd::CodePartitionDirectory)>::new();
-    let mut rogue_cpds = Vec::<(usize, String)>::new();
+    let mut directories = Vec::<cpd::CodePartitionDirectory>::new();
 
     let mut o = 0;
     while o + 16 + mem::size_of::<fpt::FPT>() <= data.len() {
         o += 16;
         let buf = &data[o..o + 4];
         if buf.eq(cpd_bytes) {
-            let cpd = cpd::parse_cpd(&data[o..]).unwrap();
-            let n = cpd.header.part_name;
-            let name = std::str::from_utf8(&n).unwrap();
-            // some names are shorter than 4 bytes and padded with 0x0
-            let name = name.trim_end_matches(char::from(0));
-            directories.push((String::from(name), cpd));
-            rogue_cpds.push((o, name.to_string()));
+            let cpd = cpd::CodePartitionDirectory::new(&data[o..], o).unwrap();
+            directories.push(cpd);
         }
     }
 
-    println!("CPDs:");
-    for (o, dn) in rogue_cpds {
-        println!(" - {dn:4} @ 0x{o:08x}");
+    println!("Scanning for all CPDs:");
+    for d in &directories {
+        println!(" - {:4} @ 0x{:08x}", d.name, d.offset);
     }
 
     let mut base = 0;
@@ -66,31 +91,36 @@ pub fn parse(data: &[u8]) -> Result<ME_FPT, String> {
                 // some names are shorter than 4 bytes and padded with 0x0
                 let name = name.trim_end_matches(char::from(0));
                 let n = u32::from_be_bytes(e.name);
+                let o = base + (e.offset & 0x003f_ffff) as usize;
+                let s = e.size as usize;
                 match n {
                     DLMP | FTPR | NFTP => {
-                        let o = base + e.offset as usize;
-                        let s = e.size as usize;
-
                         if o + 4 < data.len() {
                             let buf = &data[o..o + 4];
                             if buf.eq(cpd_bytes) {
-                                let cpd = cpd::parse_cpd(&data[o..o + s]).unwrap();
-                                directories.push((String::from(name), cpd));
+                                let cpd =
+                                    cpd::CodePartitionDirectory::new(&data[o..o + s], o).unwrap();
+                                directories.push(cpd);
+                            } else {
+                                // TODO: may have $MN2 signature
+                                println!("{name} @ {o:08x} has no CPD signature");
+                                if debug {
+                                    dump48(&data[o..]);
+                                }
+                                if let Ok(m) = man::Manifest::new(&data[o..]) {
+                                    println!("version {} {}", m.header.version, m.header.date);
+                                }
                             }
                         }
                     }
-
                     MFS | AFSP => {
-                        let o = base + e.offset as usize;
-                        let s = e.size as usize;
-                        if let Err(e) = mfs::parse(&data[o..o + s]) {
-                            println!("MFS: {e}");
+                        if PARSE_MFS {
+                            if let Err(e) = mfs::parse(&data[o..o + s]) {
+                                println!("MFS: {e}");
+                            }
                         }
                     }
                     _ => {
-                        let o = base + e.offset as usize;
-                        let s = e.size as usize;
-
                         if n != FTUP && o + 4 < data.len() {
                             let buf = &data[o..o + 4];
                             if let Ok(sig) = std::str::from_utf8(buf) {
@@ -100,10 +130,20 @@ pub fn parse(data: &[u8]) -> Result<ME_FPT, String> {
                                 }
                             }
                         }
-                        println!("Cannot parse {name} (yet), skipping...");
+                        // TODO: may have $MN2 signature
+                        println!("Cannot (yet) parse {name} @ 0x{o:08x} (0x{s:08x}), skipping...");
+                        if debug {
+                            dump48(&data[o..]);
+                        }
+                        if let Ok(m) = man::Manifest::new(&data[o..]) {
+                            println!("MANIFEST; version {} {}", m.header.version, m.header.date);
+                        }
                     }
                 }
             }
+
+            // TODO: get MN2 header which includes ME version etc
+            // see MEA get_variant + Fiano/CSS ??
 
             let me_fpt = ME_FPT {
                 base,

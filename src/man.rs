@@ -57,24 +57,36 @@ impl Display for Vendor {
     }
 }
 
-#[derive(AsBytes, FromBytes, FromZeroes, Serialize, Deserialize, Clone, Copy, Debug)]
+#[derive(AsBytes, FromBytes, FromZeroes, Clone, Copy, Debug)]
 #[repr(C)]
 pub struct Header {
     _0: [u8; 16],
     pub vendor: Vendor,
     _12: u16,
     pub date: Date,
-    _16: u32,
+    _18: u32,
     pub magic: [u8; 4],
-    _20: u32,
+    // NOTE: only for Gen 2 ME firmware
+    pub entries: u32,
     pub version: Version,
     _2b: u32,
+    _30: u16,
+    xxx: u16,
+    _38: [u8; 0x40],
+    xx0: u16,
+    xx1: u16,
 }
+// 0x80
 
-#[derive(AsBytes, FromBytes, FromZeroes, Serialize, Deserialize, Clone, Copy, Debug)]
+const HEADER_SIZE: usize = core::mem::size_of::<Header>();
+const KEY_SIZE: usize = 0x100;
+
+#[derive(AsBytes, FromBytes, FromZeroes, Clone, Copy, Debug)]
 #[repr(C)]
 pub struct Manifest {
     pub header: Header,
+    pub key1: [u8; KEY_SIZE],
+    pub key2: [u8; KEY_SIZE],
 }
 
 impl<'a> Manifest {
@@ -86,7 +98,14 @@ impl<'a> Manifest {
             return Err(err);
         }
 
-        let m = Self { header };
+        let key1: [u8; KEY_SIZE] = data[HEADER_SIZE..HEADER_SIZE + KEY_SIZE]
+            .try_into()
+            .unwrap();
+        let key2: [u8; KEY_SIZE] = data[HEADER_SIZE + KEY_SIZE..HEADER_SIZE + 2 * KEY_SIZE]
+            .try_into()
+            .unwrap();
+
+        let m = Self { header, key1, key2 };
 
         Ok(m)
     }
@@ -97,6 +116,7 @@ impl Display for Manifest {
         let ver = self.header.version;
         let date = self.header.date;
         let ven = self.header.vendor;
-        write!(f, "vendor {ven}, version {ver} {date}")
+        let e = self.header.entries;
+        write!(f, "vendor {ven}, version {ver} {date}, {e} entries")
     }
 }

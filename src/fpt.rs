@@ -82,6 +82,9 @@ pub fn get_part_info(n: &str) -> (PartitionType, &str) {
         "ISHC" => (PartitionType::Code, "Integrated Sensors Hub"),
         "AFSP" => (PartitionType::None, "8778 55aa signature like MFS"),
         "FTPM" => (PartitionType::Code, "Firmware TPM (unconfirmed)"),
+        "GLUT" => (PartitionType::Data, "Huffman Look-Up Table"),
+        "EFFS" => (PartitionType::Data, "EFFS File System"),
+        "FOVD" => (PartitionType::Data, "FOVD..."),
         _ => (PartitionType::None, "[> UNKNOWN <]"),
     }
 }

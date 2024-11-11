@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use zerocopy::FromBytes;
 use zerocopy_derive::{AsBytes, FromBytes, FromZeroes};
 
-const VENDOR_INTEL: u16 = 0x8086;
+const VENDOR_INTEL: u32 = 0x8086;
 const MANIFEST2_MAGIC: &[u8] = b"$MN2";
 
 #[derive(AsBytes, FromBytes, FromZeroes, Serialize, Deserialize, Clone, Copy, Debug)]
@@ -44,7 +44,7 @@ impl Display for Date {
 
 #[derive(AsBytes, FromBytes, FromZeroes, Serialize, Deserialize, Clone, Copy, Debug)]
 #[repr(C)]
-pub struct Vendor(u16);
+pub struct Vendor(u32);
 
 impl Display for Vendor {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -57,26 +57,29 @@ impl Display for Vendor {
     }
 }
 
+// https://github.com/skochinsky/me-tools me_unpack.py MeManifestHeader
 #[derive(AsBytes, FromBytes, FromZeroes, Clone, Copy, Debug)]
 #[repr(C)]
 pub struct Header {
-    _0: [u8; 16],
+    pub mod_type: u16,
+    pub mod_subtype: u16,
+    pub header_len: u32, // in dwords, usually 0xa1, i.e., 0x284 bytes
+    pub header_ver: u32,
+    pub flags: u32,
     pub vendor: Vendor,
-    _12: u16,
     pub date: Date,
-    _18: u32,
+    pub size: u32, // in dwords, dword size is 32bit
     pub magic: [u8; 4],
     // NOTE: only for Gen 2 ME firmware
     pub entries: u32,
     pub version: Version,
-    _2b: u32,
-    _30: u16,
-    xxx: u16,
-    _38: [u8; 0x40],
-    xx0: u16,
-    xx1: u16,
+    xx0: u32,          // e.g. 0x0000_0001
+    _30: u32,          // e.g. all zero
+    xxx: u32,          // e.g. 0x0000_0003
+    _38: [u8; 0x40],   // e.g. all zero
+    pub key_size: u32, // in dwords
+    pub scratch_size: u32,
 }
-// 0x80
 
 const HEADER_SIZE: usize = core::mem::size_of::<Header>();
 const KEY_SIZE: usize = 0x100;
@@ -85,9 +88,12 @@ const KEY_SIZE: usize = 0x100;
 #[repr(C)]
 pub struct Manifest {
     pub header: Header,
-    pub key1: [u8; KEY_SIZE],
-    pub key2: [u8; KEY_SIZE],
+    pub rsa_pub_key: [u8; KEY_SIZE],
+    pub rsa_pub_exp: u32,
+    pub rsa_sig: [u8; KEY_SIZE],
 }
+
+pub const MANIFEST_SIZE: usize = core::mem::size_of::<Manifest>();
 
 impl<'a> Manifest {
     pub fn new(data: &'a [u8]) -> Result<Self, String> {
@@ -98,14 +104,19 @@ impl<'a> Manifest {
             return Err(err);
         }
 
-        let key1: [u8; KEY_SIZE] = data[HEADER_SIZE..HEADER_SIZE + KEY_SIZE]
-            .try_into()
-            .unwrap();
-        let key2: [u8; KEY_SIZE] = data[HEADER_SIZE + KEY_SIZE..HEADER_SIZE + 2 * KEY_SIZE]
-            .try_into()
-            .unwrap();
+        let o = HEADER_SIZE;
+        let rsa_pub_key: [u8; KEY_SIZE] = data[o..o + KEY_SIZE].try_into().unwrap();
+        let o = o + KEY_SIZE;
+        let rsa_pub_exp = u32::read_from_prefix(&data[o..o + 4]).unwrap();
+        let o = o + 4;
+        let rsa_sig: [u8; KEY_SIZE] = data[o..o + KEY_SIZE].try_into().unwrap();
 
-        let m = Self { header, key1, key2 };
+        let m = Self {
+            header,
+            rsa_pub_key,
+            rsa_pub_exp,
+            rsa_sig,
+        };
 
         Ok(m)
     }

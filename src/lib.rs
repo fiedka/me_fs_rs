@@ -31,6 +31,9 @@ fn dump48(data: &[u8]) {
     println!("{b:02x?}");
 }
 
+const SIG_LUT: u32 = u32::from_le_bytes(*b"LLUT");
+const SIG_LZMA: u32 = u32::from_le_bytes([0x36, 0x00, 0x40, 0x00]);
+
 pub fn parse(data: &[u8]) -> Result<ME_FPT, String> {
     let debug = false;
 
@@ -104,13 +107,25 @@ pub fn parse(data: &[u8]) -> Result<ME_FPT, String> {
                                 directories.push(cpd);
                             } else if let Ok(m) = man::Manifest::new(&data[o..]) {
                                 println!("Gen 2 directory {name}, {m}");
-                                // TODO: let Rust calc manifest size
-                                const MANIFEST_SIZE: usize = 0x280;
-                                let d = &data[o + MANIFEST_SIZE..];
+                                let d = &data[o + man::MANIFEST_SIZE..];
                                 let c = m.header.entries as usize;
                                 if let Ok(d) = gen2::Directory::new(d, c) {
                                     for e in d.entries {
-                                        println!(" - {e}");
+                                        let pos = o + e.offset as usize;
+                                        let sig =
+                                            u32::read_from_prefix(&data[pos..pos + 4]).unwrap();
+                                        let t = e.compression_type();
+                                        let kind = match sig {
+                                            SIG_LUT => "LLUT",
+                                            SIG_LZMA => "LZMA",
+                                            _ => {
+                                                dump48(&data[pos..]);
+                                                "unknown"
+                                            }
+                                        };
+                                        println!(" - {e}    {:08x} ({kind} {t:?})", pos);
+                                        let b = e.bin_map();
+                                        println!("     {b}");
                                     }
                                 }
                                 println!();
@@ -126,13 +141,21 @@ pub fn parse(data: &[u8]) -> Result<ME_FPT, String> {
                         println!("{name} @ {o:08x}");
                         if let Ok(m) = man::Manifest::new(&data[o..]) {
                             println!("Gen 2 directory {name}, {m}");
-                            // TODO: let Rust calc manifest size
-                            const MANIFEST_SIZE: usize = 0x280;
-                            let d = &data[o + MANIFEST_SIZE..];
+                            let d = &data[o + man::MANIFEST_SIZE..];
                             let c = m.header.entries as usize;
                             if let Ok(d) = gen2::Directory::new(d, c) {
                                 for e in d.entries {
-                                    println!(" - {e}");
+                                    let pos = o + e.offset as usize;
+                                    let sig = u32::read_from_prefix(&data[pos..pos + 4]).unwrap();
+                                    let kind = match sig {
+                                        SIG_LUT => "LLUT",
+                                        SIG_LZMA => "LZMA",
+                                        _ => {
+                                            dump48(&data[pos..]);
+                                            "unknown"
+                                        }
+                                    };
+                                    println!(" - {e}    {:08x} ({kind})", pos);
                                 }
                             }
                             println!();

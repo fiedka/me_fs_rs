@@ -102,14 +102,22 @@ pub fn parse(data: &[u8]) -> Result<ME_FPT, String> {
                                 let cpd =
                                     cpd::CodePartitionDirectory::new(&data[o..o + s], o).unwrap();
                                 directories.push(cpd);
+                            } else if let Ok(m) = man::Manifest::new(&data[o..]) {
+                                println!("Gen 2 directory {name}, {m}");
+                                // TODO: let Rust calc manifest size
+                                const MANIFEST_SIZE: usize = 0x280;
+                                let d = &data[o + MANIFEST_SIZE..];
+                                let c = m.header.entries as usize;
+                                if let Ok(d) = gen2::Directory::new(d, c) {
+                                    for e in d.entries {
+                                        println!(" - {e}");
+                                    }
+                                }
+                                println!();
                             } else {
                                 println!("{name} @ {o:08x} has no CPD signature");
                                 if debug {
                                     dump48(&data[o..]);
-                                }
-                                if let Ok(m) = man::Manifest::new(&data[o..]) {
-                                    println!("{m}");
-                                    // TODO: parse ME Gen 2 firmware directory
                                 }
                             }
                         }
@@ -117,7 +125,17 @@ pub fn parse(data: &[u8]) -> Result<ME_FPT, String> {
                     MDMV => {
                         println!("{name} @ {o:08x}");
                         if let Ok(m) = man::Manifest::new(&data[o..]) {
-                            println!("{m}");
+                            println!("Gen 2 directory {name}, {m}");
+                            // TODO: let Rust calc manifest size
+                            const MANIFEST_SIZE: usize = 0x280;
+                            let d = &data[o + MANIFEST_SIZE..];
+                            let c = m.header.entries as usize;
+                            if let Ok(d) = gen2::Directory::new(d, c) {
+                                for e in d.entries {
+                                    println!(" - {e}");
+                                }
+                            }
+                            println!();
                         }
                     }
                     MFS | AFSP => {

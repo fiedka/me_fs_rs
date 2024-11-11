@@ -57,6 +57,20 @@ impl Display for Vendor {
     }
 }
 
+#[derive(AsBytes, FromBytes, FromZeroes, Serialize, Deserialize, Clone, Copy, Debug)]
+#[repr(C)]
+pub struct HeaderVersion {
+    minor: u16,
+    major: u16,
+}
+
+impl Display for HeaderVersion {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let HeaderVersion { major, minor } = self;
+        write!(f, "{major}.{minor}")
+    }
+}
+
 // https://github.com/skochinsky/me-tools me_unpack.py MeManifestHeader
 #[derive(AsBytes, FromBytes, FromZeroes, Clone, Copy, Debug)]
 #[repr(C)]
@@ -64,7 +78,7 @@ pub struct Header {
     pub mod_type: u16,
     pub mod_subtype: u16,
     pub header_len: u32, // in dwords, usually 0xa1, i.e., 0x284 bytes
-    pub header_ver: u32,
+    pub header_ver: HeaderVersion,
     pub flags: u32,
     pub vendor: Vendor,
     pub date: Date,
@@ -79,6 +93,21 @@ pub struct Header {
     _38: [u8; 0x40],   // e.g. all zero
     pub key_size: u32, // in dwords
     pub scratch_size: u32,
+}
+
+impl Display for Header {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let hver = self.header_ver;
+        let hlen = self.header_len;
+        let ver = self.version;
+        let date = self.date;
+        let ven = self.vendor;
+        let e = self.entries;
+        write!(
+            f,
+            "{hver} {hlen:04x} vendor {ven}, version {ver} {date}, {e} entries"
+        )
+    }
 }
 
 const HEADER_SIZE: usize = core::mem::size_of::<Header>();
@@ -124,10 +153,8 @@ impl<'a> Manifest {
 
 impl Display for Manifest {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let ver = self.header.version;
-        let date = self.header.date;
-        let ven = self.header.vendor;
-        let e = self.header.entries;
-        write!(f, "vendor {ven}, version {ver} {date}, {e} entries")
+        let h = self.header;
+        let exp = self.rsa_pub_exp;
+        write!(f, "{h}, RSA exp {exp}")
     }
 }

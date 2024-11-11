@@ -208,6 +208,7 @@ pub fn parse(data: &[u8]) -> Result<ME_FPT, String> {
 
 /*
 What is this?! (~/firmware/XCY/GGLK3-VERA/dump/original/0.rom)
+Later part of the manifest... some sort of flags + metadata?
 
 0001d3b0: d266 f82a 0100 0000 7003 0000 0000 0000  .f.*....p.......
 0001d3c0: 2400 0000 4654 5052 6b65 726e 656c 0000  $...FTPRkernel..
@@ -222,8 +223,8 @@ What is this?! (~/firmware/XCY/GGLK3-VERA/dump/original/0.rom)
 
 /*
 Some entries here have 8 byte magics or XXID...?
-EFFSOSID may be EFFS - embedded flash file system
-FOVD also on Skochinsky's slides, see
+EFFS - embedded flash file system (?)
+FOVD - ???; also on Skochinsky's slides, see
 https://recon.cx/2014/slides/Recon%202014%20Skochinsky.pdf
 NVCL and some other have lots of ffff...?
 ~/firmware/XMG/C404/extracted/BIOS/BIOS.BIN/XMGBF.B05

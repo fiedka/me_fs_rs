@@ -20,13 +20,12 @@ struct Args {
     file: String,
 }
 
-fn print_directories(dirs: &Vec<CodePartitionDirectory>, data: &[u8]) {
+fn print_directories(dirs: &Vec<CodePartitionDirectory>) {
     for d in dirs {
         println!();
         let checksum = d.header.version_or_checksum;
-        println!("{} checksum or version: {checksum:08x}", d.name);
         let o = d.offset;
-        let manifest_name = format!("{}.man", d.name);
+        println!("{} @ {o:08x}, checksum or version: {checksum:08x}", d.name);
         match d.manifest() {
             Ok(m) => println!("{m}"),
             Err(e) => println!("{e}"),
@@ -36,14 +35,7 @@ fn print_directories(dirs: &Vec<CodePartitionDirectory>, data: &[u8]) {
         let mut entries = d.entries.clone();
         entries.sort_by_key(|e| e.offset);
         for e in entries {
-            let o = e.offset;
-            let s = e.size;
-            let end = o + s;
-            let f = e.compression_flag;
-            if let Ok(n) = std::str::from_utf8(&e.name) {
-                let n = n.trim_end_matches(char::from(0));
-                println!("  {n:13} @ 0x{o:06x}:0x{end:06x} (0x{s:06x}) {f:032b}");
-            }
+            println!("  {e}");
         }
     }
 }
@@ -53,18 +45,7 @@ fn print_fpt_entries(entries: &Vec<FPTEntry>) {
     let mut entries = entries.clone();
     entries.sort_by_key(|e| e.offset);
     for e in entries {
-        let o = e.offset as usize;
-        let s = e.size as usize;
-        let end = o + s;
-
-        let name = std::str::from_utf8(&e.name).unwrap();
-        let name = name.trim_end_matches(char::from(0));
-
-        let (part_type, full_name) = me_fs_rs::fpt::get_part_info(name);
-        let part_info = format!("{part_type:?}: {full_name}");
-        let name_offset_end_size = format!("{name:>4} @ 0x{o:08x}:0x{end:08x} (0x{s:08x})");
-
-        println!("- {name_offset_end_size}  {part_info}");
+        println!("- {e}");
     }
 }
 
@@ -94,7 +75,7 @@ fn main() -> io::Result<()> {
             }
             if args.verbose {
                 println!("\nDirectories:");
-                print_directories(&directories, &data);
+                print_directories(&directories);
             }
         }
         Err(e) => {

@@ -178,7 +178,6 @@ pub fn parse(data: &[u8]) -> Result<ME_FPT, String> {
                                 }
                             }
                         }
-                        // TODO: may have $MN2 signature
                         println!("Cannot (yet) parse {name} @ 0x{o:08x} (0x{s:08x}), skipping...");
                         if debug {
                             dump48(&data[o..]);

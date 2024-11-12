@@ -1,3 +1,4 @@
+use core::fmt::{self, Display};
 use serde::{Deserialize, Serialize};
 use zerocopy_derive::{AsBytes, FromBytes, FromZeroes};
 
@@ -17,6 +18,23 @@ pub struct FPTEntry {
     pub max_tokens: u32,
     pub scratch_sectors: u32,
     pub flags: u32,
+}
+
+impl Display for FPTEntry {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let o = self.offset as usize;
+        let s = self.size as usize;
+        let end = o + s;
+
+        let name = std::str::from_utf8(&self.name).unwrap();
+        let name = name.trim_end_matches(char::from(0));
+
+        let (part_type, full_name) = get_part_info(name);
+        let part_info = format!("{part_type:?}: {full_name}");
+        let name_offset_end_size = format!("{name:>4} @ 0x{o:08x}:0x{end:08x} (0x{s:08x})");
+
+        write!(f, "{name_offset_end_size}  {part_info}")
+    }
 }
 
 #[derive(AsBytes, FromBytes, FromZeroes, Serialize, Deserialize, Clone, Copy, Debug)]

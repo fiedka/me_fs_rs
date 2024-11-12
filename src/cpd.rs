@@ -1,3 +1,4 @@
+use core::fmt::{self, Display};
 use serde::{Deserialize, Serialize};
 use zerocopy::FromBytes;
 use zerocopy_derive::{AsBytes, FromBytes, FromZeroes};
@@ -21,6 +22,21 @@ pub struct CPDEntry {
     pub offset: u32,
     pub size: u32,
     pub compression_flag: u32,
+}
+
+impl Display for CPDEntry {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let o = self.offset;
+        let s = self.size;
+        let end = o + s;
+        let flag = self.compression_flag;
+        let n = match std::str::from_utf8(&self.name) {
+            Ok(n) => n.trim_end_matches(char::from(0)),
+            _ => "????",
+        };
+
+        write!(f, "{n:13} @ 0x{o:06x}:0x{end:06x} (0x{s:06x}) {flag:032b}")
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

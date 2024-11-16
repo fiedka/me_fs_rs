@@ -109,14 +109,25 @@ pub struct Header {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[repr(C)]
 pub struct Directory {
+    // pub manifest: Manifest,
     pub header: Header,
     pub entries: Vec<Entry>,
+    pub offset: usize,
+    pub name: String,
+}
+
+impl Display for Directory {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let n = &self.name;
+        let o = self.offset;
+        write!(f, "{n} @ {o:08x}")
+    }
 }
 
 const HEADER_SIZE: usize = core::mem::size_of::<Header>();
 
 impl Directory {
-    pub fn new(data: &[u8], count: usize) -> Result<Self, String> {
+    pub fn new(data: &[u8], offset: usize, count: usize) -> Result<Self, String> {
         let Some(header) = Header::read_from_prefix(data) else {
             return Err("cannot parse ME FW Gen 2 directory header".to_string());
         };
@@ -129,7 +140,16 @@ impl Directory {
             ));
         };
         let entries = r.into_slice().to_vec();
-        Ok(Self { header, entries })
+        let name = match from_utf8(&header.name) {
+            Ok(n) => n.trim_end_matches('\0').to_string(),
+            Err(_) => format!("{:02x?}", header.name),
+        };
+        Ok(Self {
+            header,
+            entries,
+            offset,
+            name,
+        })
     }
 }
 

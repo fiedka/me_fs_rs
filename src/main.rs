@@ -1,5 +1,7 @@
 use clap::Parser;
-use me_fs_rs::{cpd::CodePartitionDirectory, fpt::FPTEntry, parse, ME_FPT};
+use me_fs_rs::{
+    cpd::CodePartitionDirectory, fpt::FPTEntry, gen2::Directory as Gen2Dir, parse, ME_FPT,
+};
 use std::fs;
 use std::io;
 
@@ -18,6 +20,32 @@ struct Args {
     /// File to read
     #[arg(index = 1)]
     file: String,
+}
+
+fn print_gen2_dirs(dirs: &Vec<Gen2Dir>) {
+    for dir in dirs {
+        println!("{dir}");
+        for e in &dir.entries {
+            let pos = dir.offset + e.offset as usize;
+            /*
+            let sig =
+                u32::read_from_prefix(&data[pos..pos + 4]).unwrap();
+            let kind = match sig {
+                SIG_LUT => "LLUT",
+                SIG_LZMA => "LZMA",
+                _ => {
+                    dump48(&data[pos..]);
+                    "unknown"
+                }
+            };
+            */
+            let kind = "...";
+            let t = e.compression_type();
+            let b = e.bin_map();
+            println!(" - {e}    {pos:08x} {t:?} ({kind})\n     {b}");
+        }
+        println!();
+    }
 }
 
 fn print_directories(dirs: &Vec<CodePartitionDirectory>) {
@@ -63,6 +91,7 @@ fn main() -> io::Result<()> {
                 header,
                 entries,
                 directories,
+                gen2dirs,
             } = fpt;
             if args.verbose {
                 println!("\nFound at 0x{base:08x}: {header:#0x?}");
@@ -76,6 +105,7 @@ fn main() -> io::Result<()> {
             if args.verbose {
                 println!("\nDirectories:");
                 print_directories(&directories);
+                print_gen2_dirs(&gen2dirs);
             }
         }
         Err(e) => {

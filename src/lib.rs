@@ -53,6 +53,7 @@ pub fn parse(data: &[u8]) -> Result<ME_FPT, String> {
 
     let cpd_bytes = cpd::CPD_MAGIC.as_bytes();
     let mut entries = Vec::<fpt::FPTEntry>::new();
+    let mut gen2dirs = Vec::<gen2::Directory>::new();
     let mut directories = Vec::<cpd::CodePartitionDirectory>::new();
 
     let mut o = 0;
@@ -60,7 +61,7 @@ pub fn parse(data: &[u8]) -> Result<ME_FPT, String> {
         o += 16;
         let buf = &data[o..o + 4];
         if buf.eq(cpd_bytes) {
-            let cpd = cpd::CodePartitionDirectory::new(&data[o..], o).unwrap();
+            let cpd = cpd::CodePartitionDirectory::new(data[o..].to_vec(), o).unwrap();
             directories.push(cpd);
         }
     }
@@ -91,42 +92,30 @@ pub fn parse(data: &[u8]) -> Result<ME_FPT, String> {
             }
 
             for e in &entries {
-                let name = std::str::from_utf8(&e.name).unwrap();
-                // some names are shorter than 4 bytes and padded with 0x0
-                let name = name.trim_end_matches(char::from(0));
+                let name = match std::str::from_utf8(&e.name) {
+                    // some names are shorter than 4 bytes and padded with 0x0
+                    Ok(n) => n.trim_end_matches('\0').to_string(),
+                    Err(_) => format!("{:02x?}", &e.name),
+                };
                 let n = u32::from_be_bytes(e.name);
                 let o = base + (e.offset & 0x003f_ffff) as usize;
                 let s = e.size as usize;
                 match n {
-                    DLMP | FTPR | NFTP => {
+                    MDMV | DLMP | FTPR | NFTP => {
                         if o + 4 < data.len() {
                             let buf = &data[o..o + 4];
                             if buf.eq(cpd_bytes) {
-                                let cpd =
-                                    cpd::CodePartitionDirectory::new(&data[o..o + s], o).unwrap();
-                                directories.push(cpd);
+                                if let Ok(cpd) =
+                                    cpd::CodePartitionDirectory::new(data[o..o + s].to_vec(), o)
+                                {
+                                    directories.push(cpd);
+                                }
                             } else if let Ok(m) = man::Manifest::new(&data[o..]) {
                                 println!("Gen 2 directory {name}, {m}");
                                 let d = &data[o + man::MANIFEST_SIZE..];
                                 let c = m.header.entries as usize;
-                                if let Ok(d) = gen2::Directory::new(d, c) {
-                                    for e in d.entries {
-                                        let pos = o + e.offset as usize;
-                                        let sig =
-                                            u32::read_from_prefix(&data[pos..pos + 4]).unwrap();
-                                        let t = e.compression_type();
-                                        let kind = match sig {
-                                            SIG_LUT => "LLUT",
-                                            SIG_LZMA => "LZMA",
-                                            _ => {
-                                                dump48(&data[pos..]);
-                                                "unknown"
-                                            }
-                                        };
-                                        println!(" - {e}    {:08x} ({kind} {t:?})", pos);
-                                        let b = e.bin_map();
-                                        println!("     {b}");
-                                    }
+                                if let Ok(dir) = gen2::Directory::new(d, o, c) {
+                                    gen2dirs.push(dir);
                                 }
                                 println!();
                             } else {
@@ -135,30 +124,6 @@ pub fn parse(data: &[u8]) -> Result<ME_FPT, String> {
                                     dump48(&data[o..]);
                                 }
                             }
-                        }
-                    }
-                    MDMV => {
-                        println!("{name} @ {o:08x}");
-                        if let Ok(m) = man::Manifest::new(&data[o..]) {
-                            println!("Gen 2 directory {name}, {m}");
-                            let d = &data[o + man::MANIFEST_SIZE..];
-                            let c = m.header.entries as usize;
-                            if let Ok(d) = gen2::Directory::new(d, c) {
-                                for e in d.entries {
-                                    let pos = o + e.offset as usize;
-                                    let sig = u32::read_from_prefix(&data[pos..pos + 4]).unwrap();
-                                    let kind = match sig {
-                                        SIG_LUT => "LLUT",
-                                        SIG_LZMA => "LZMA",
-                                        _ => {
-                                            dump48(&data[pos..]);
-                                            "unknown"
-                                        }
-                                    };
-                                    println!(" - {e}    {:08x} ({kind})", pos);
-                                }
-                            }
-                            println!();
                         }
                     }
                     MFS | AFSP => {
@@ -197,6 +162,7 @@ pub fn parse(data: &[u8]) -> Result<ME_FPT, String> {
                 header: fpt,
                 entries,
                 directories,
+                gen2dirs,
             };
             return Ok(me_fpt);
         }

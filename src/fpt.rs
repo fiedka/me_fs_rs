@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use zerocopy_derive::{AsBytes, FromBytes, FromZeroes};
 
 use crate::cpd::CodePartitionDirectory;
+use crate::gen2::Directory as Gen2Directory;
 
 // see https://github.com/peterbjornx/meimagetool ...intelme/model/fpt/ (Java)
 // and https://github.com/linuxboot/fiano/blob/main/pkg/intel/me/structures.go
@@ -26,10 +27,12 @@ impl Display for FPTEntry {
         let s = self.size as usize;
         let end = o + s;
 
-        let name = std::str::from_utf8(&self.name).unwrap();
-        let name = name.trim_end_matches(char::from(0));
+        let name = match std::str::from_utf8(&self.name) {
+            Ok(n) => n.trim_end_matches('\0').to_string(),
+            Err(_) => format!("{:02x?}", &self.name),
+        };
 
-        let (part_type, full_name) = get_part_info(name);
+        let (part_type, full_name) = get_part_info(name.as_str());
         let part_info = format!("{part_type:?}: {full_name}");
         let name_offset_end_size = format!("{name:>4} @ 0x{o:08x}:0x{end:08x} (0x{s:08x})");
 
@@ -67,12 +70,13 @@ pub struct FPT {
 }
 
 #[allow(non_camel_case_types)]
-#[derive(Serialize, Clone, Debug)]
-pub struct ME_FPT<'a> {
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ME_FPT {
     pub base: usize,
     pub header: FPT,
     pub entries: Vec<FPTEntry>,
-    pub directories: Vec<CodePartitionDirectory<'a>>,
+    pub directories: Vec<CodePartitionDirectory>,
+    pub gen2dirs: Vec<Gen2Directory>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -89,6 +93,7 @@ pub fn get_part_info(n: &str) -> (PartitionType, &str) {
         "FTUP" => (PartitionType::Code, "[NFTP]+[WCOD]+[LOCL]"),
         "DLMP" => (PartitionType::Code, "IDLM partition"),
         "PSVN" => (PartitionType::Data, "Secure Version Number"),
+        // IVBP used in hibernation
         "IVBP" => (PartitionType::Data, "IV + Bring Up cache"),
         "MFS" => (PartitionType::Data, "ME Flash File System"),
         "NFTP" => (PartitionType::Code, "Additional code"),

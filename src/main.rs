@@ -54,7 +54,7 @@ fn print_directories(dirs: &Vec<CodePartitionDirectory>) {
         let checksum = d.header.version_or_checksum;
         let o = d.offset;
         println!("{} @ {o:08x}, checksum or version: {checksum:08x}", d.name);
-        match d.manifest() {
+        match &d.manifest {
             Ok(m) => println!("{m}"),
             Err(e) => println!("{e}"),
         }

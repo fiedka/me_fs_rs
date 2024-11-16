@@ -72,7 +72,7 @@ impl Display for HeaderVersion {
 }
 
 // https://github.com/skochinsky/me-tools me_unpack.py MeManifestHeader
-#[derive(AsBytes, FromBytes, FromZeroes, Clone, Copy, Debug)]
+#[derive(Serialize, Deserialize, AsBytes, FromBytes, FromZeroes, Clone, Copy, Debug)]
 #[repr(C)]
 pub struct Header {
     pub mod_type: u16,
@@ -87,10 +87,11 @@ pub struct Header {
     // NOTE: only for Gen 2 ME firmware
     pub entries: u32,
     pub version: Version,
-    xx0: u32,          // e.g. 0x0000_0001
-    _30: u32,          // e.g. all zero
-    xxx: u32,          // e.g. 0x0000_0003
-    _38: [u8; 0x40],   // e.g. all zero
+    xx0: u32, // e.g. 0x0000_0001
+    _30: u32, // e.g. all zero
+    xxx: u32, // e.g. 0x0000_0003
+    #[serde(with = "serde_bytes")]
+    _38: [u8; 0x40], // e.g. all zero
     pub key_size: u32, // in dwords
     pub scratch_size: u32,
 }
@@ -113,12 +114,14 @@ impl Display for Header {
 const HEADER_SIZE: usize = core::mem::size_of::<Header>();
 const KEY_SIZE: usize = 0x100;
 
-#[derive(AsBytes, FromBytes, FromZeroes, Clone, Copy, Debug)]
+#[derive(Serialize, Deserialize, AsBytes, FromBytes, FromZeroes, Clone, Copy, Debug)]
 #[repr(C)]
 pub struct Manifest {
     pub header: Header,
+    #[serde(with = "serde_bytes")]
     pub rsa_pub_key: [u8; KEY_SIZE],
     pub rsa_pub_exp: u32,
+    #[serde(with = "serde_bytes")]
     pub rsa_sig: [u8; KEY_SIZE],
 }
 

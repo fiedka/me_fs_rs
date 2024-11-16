@@ -1,3 +1,4 @@
+use crate::man::Manifest;
 use core::fmt::{self, Display};
 use serde::{Deserialize, Serialize};
 use zerocopy::FromBytes;
@@ -53,10 +54,10 @@ impl Display for CPDEntry {
 #[repr(C)]
 pub struct CodePartitionDirectory {
     pub header: CPDHeader,
+    pub manifest: Result<Manifest, String>,
     pub entries: Vec<CPDEntry>,
     pub offset: usize,
     pub name: String,
-    pub data: Vec<u8>,
 }
 
 // TODO: See https://github.com/skochinsky/me-tools class CPDEntry
@@ -84,24 +85,25 @@ impl CodePartitionDirectory {
             entry.offset &= OFFSET_MASK;
             entries.push(entry);
         }
+
+        let manifest = {
+            let name = format!("{}.man", name);
+            if let Some(e) = entries.iter().find(|e| e.name() == name) {
+                let b = &data[e.offset as usize..];
+                Manifest::new(b)
+            } else {
+                Err("no manifest found".to_string())
+            }
+        };
+
         let cpd = CodePartitionDirectory {
             header,
+            manifest,
             entries,
             offset,
             name: name.to_string(),
-            data,
         };
-        Ok(cpd)
-    }
 
-    pub fn manifest(&self) -> Result<crate::man::Manifest, String> {
-        let entries = &mut self.entries.iter();
-        let name = format!("{}.man", self.name);
-        if let Some(e) = entries.find(|e| e.name() == name) {
-            let b = &self.data[e.offset as usize..];
-            crate::man::Manifest::new(b)
-        } else {
-            Err("no manifest found".to_string())
-        }
+        Ok(cpd)
     }
 }

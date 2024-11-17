@@ -40,7 +40,7 @@ pub fn parse(data: &[u8]) -> Result<ME_FPT, String> {
     println!();
     match fit::Fit::new(data) {
         Ok(fit) => {
-            println!("{:02x?}", fit.header);
+            println!("FIT @ {:08x}, {}", fit.offset, fit.header);
             for e in fit.entries {
                 println!("{e}");
             }

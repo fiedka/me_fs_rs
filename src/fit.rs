@@ -16,6 +16,14 @@ pub struct FitHeader {
     pub checksum: u8,
 }
 
+impl Display for FitHeader {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Header counts as entry, but we want the actual number of entries
+        let e = self.entries - 1;
+        write!(f, "{e} entries")
+    }
+}
+
 #[derive(AsBytes, FromZeroes, Serialize, Deserialize, Clone, Copy, Debug)]
 #[repr(u8)]
 pub enum EntryType {
@@ -53,6 +61,7 @@ pub struct Fit {
     pub header: FitHeader,
     pub entries: Vec<FitEntry>,
     pub mapping: usize,
+    pub offset: usize,
 }
 
 const FIT_HEADER_SIZE: usize = core::mem::size_of::<FitHeader>();
@@ -111,21 +120,25 @@ impl<'a> Fit {
         let fitp = &data[fitp_pos..fitp_pos + 4];
         let mapping = get_mapping(data.len());
         let Some(fp) = u32::read_from_prefix(fitp) else {
-            return Err(format!("cannot read FIT pointer @ {:08x}", fitp_pos));
+            return Err(format!("Cannot read FIT pointer @ {:08x}", fitp_pos));
         };
-        let fit_pointer = mapping & fp as usize;
+        if fp == 0xffff_ffff {
+            let err = format!("Not a FIT: {fp:08x}");
+            return Err(err);
+        }
+        let offset = mapping & fp as usize;
         // NOTE: FIT is usually aligned. The spec does not mandate it though.
-        if fit_pointer % 0x10 != 0 {
-            let err = format!("Not a FIT @ {fit_pointer:08x}");
+        if offset % 0x10 != 0 {
+            let err = format!("Not a FIT pointer: {offset:08x}");
             return Err(err);
         }
 
-        let Some(header) = FitHeader::read_from_prefix(&data[fit_pointer..]) else {
-            return Err(format!("cannot parse FIT header @ {:08x}", fit_pointer));
+        let Some(header) = FitHeader::read_from_prefix(&data[offset..]) else {
+            return Err(format!("No FIT header @ {:08x}", offset));
         };
         // NOTE: The header counts as a first entry.
         let count = (header.entries - 1) as usize;
-        let pos = fit_pointer + FIT_HEADER_SIZE;
+        let pos = offset + FIT_HEADER_SIZE;
         let slice = &data[pos..];
         let Some((r, _)) = Ref::<_, [FitEntry]>::new_slice_from_prefix(slice, count) else {
             return Err(format!("cannot parse FIT entries @ {:08x}", pos));
@@ -135,6 +148,7 @@ impl<'a> Fit {
             header,
             entries,
             mapping,
+            offset,
         };
         Ok(fit)
     }

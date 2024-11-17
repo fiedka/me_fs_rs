@@ -94,12 +94,11 @@ fn main() -> io::Result<()> {
                 gen2dirs,
             } = fpt;
             if args.verbose {
-                println!("\nFound at 0x{base:08x}: {header:#0x?}");
+                println!("\nFPT at 0x{base:08x}: {header:#0x?}");
             } else if args.print {
-                println!("\nFound at 0x{base:08x}: Version {}", header.header_ver);
+                println!("\nFPT at 0x{base:08x}: Version {}", header.header_ver);
             }
             if args.print || args.verbose {
-                println!("\nPartitions:");
                 print_fpt_entries(&entries);
             }
             if args.verbose {

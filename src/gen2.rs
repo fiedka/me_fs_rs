@@ -1,3 +1,4 @@
+use crate::man::{self, Manifest};
 use core::fmt::{self, Display};
 use serde::{Deserialize, Serialize};
 use std::str::from_utf8;
@@ -109,7 +110,7 @@ pub struct Header {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[repr(C)]
 pub struct Directory {
-    // pub manifest: Manifest,
+    pub manifest: Manifest,
     pub header: Header,
     pub entries: Vec<Entry>,
     pub offset: usize,
@@ -120,18 +121,24 @@ impl Display for Directory {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let n = &self.name;
         let o = self.offset;
-        write!(f, "{n} @ {o:08x}")
+        let m = self.manifest;
+        write!(f, "{n} @ {o:08x}, {m}")
     }
 }
 
 const HEADER_SIZE: usize = core::mem::size_of::<Header>();
 
 impl Directory {
-    pub fn new(data: &[u8], offset: usize, count: usize) -> Result<Self, String> {
-        let Some(header) = Header::read_from_prefix(data) else {
+    pub fn new(data: &[u8], offset: usize) -> Result<Self, String> {
+        let Ok(manifest) = Manifest::new(data) else {
+            return Err("cannot parse Gen 2 directory manifest".to_string());
+        };
+        let count = manifest.header.entries as usize;
+        let d = &data[man::MANIFEST_SIZE..];
+        let Some(header) = Header::read_from_prefix(d) else {
             return Err("cannot parse ME FW Gen 2 directory header".to_string());
         };
-        let pos = HEADER_SIZE;
+        let pos = man::MANIFEST_SIZE + HEADER_SIZE;
         let slice = &data[pos..];
         let Some((r, _)) = Ref::<_, [Entry]>::new_slice_from_prefix(slice, count) else {
             return Err(format!(
@@ -145,6 +152,7 @@ impl Directory {
             Err(_) => format!("{:02x?}", header.name),
         };
         Ok(Self {
+            manifest,
             header,
             entries,
             offset,

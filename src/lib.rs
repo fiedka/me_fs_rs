@@ -110,14 +110,8 @@ pub fn parse(data: &[u8]) -> Result<ME_FPT, String> {
                                 {
                                     directories.push(cpd);
                                 }
-                            } else if let Ok(m) = man::Manifest::new(&data[o..]) {
-                                println!("Gen 2 directory {name}, {m}");
-                                let d = &data[o + man::MANIFEST_SIZE..];
-                                let c = m.header.entries as usize;
-                                if let Ok(dir) = gen2::Directory::new(d, o, c) {
-                                    gen2dirs.push(dir);
-                                }
-                                println!();
+                            } else if let Ok(dir) = gen2::Directory::new(&data[o..], o) {
+                                gen2dirs.push(dir);
                             } else {
                                 println!("{name} @ {o:08x} has no CPD signature");
                                 if debug {

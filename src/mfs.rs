@@ -1,3 +1,4 @@
+use core::fmt::{self, Display};
 use core::mem::size_of;
 use std::fs::{create_dir_all, File};
 use std::io::prelude::*;
@@ -721,11 +722,25 @@ const V10_MAGIC: u32 = u32::from_le_bytes(*b"MFS\0");
 #[derive(FromBytes, FromZeroes, Serialize, Deserialize, Clone, Copy, Debug)]
 #[repr(C)]
 pub struct V10PageHeader {
-    pub num_and_such: u32,
+    pub page_num: u8,
+    pub _1: u8, // ff
+    pub page_flag: u8,
+    pub _3: u8, // ff
     pub all_0: u32,
-    pub magic: [u8; 4],
-    pub smth: u32,
+    pub magic: [u8; 4], // first page only, ffff otherwise
+    pub smth: u32,      // first page only, ffff otherwise
     pub all_f: u32,
+}
+
+impl Display for V10PageHeader {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let num = self.page_num;
+        let flag = self.page_flag;
+        if num == 0xff && flag == 0xff {
+            return write!(f, "page unused");
+        }
+        write!(f, "page {num:02}, flag {flag:08b}")
+    }
 }
 
 const V10_PAGE_HEADER_SIZE: usize = size_of::<V10PageHeader>();
@@ -765,38 +780,36 @@ fn parse_v10(data: &[u8]) -> Result<bool, String> {
     }
 
     pages.sort_by(|a, b| {
-        let na = a.num_and_such as u8;
-        let nb = b.num_and_such as u8;
-        if na > nb {
-            core::cmp::Ordering::Greater
-        } else if nb > na {
-            core::cmp::Ordering::Less
-        } else {
-            core::cmp::Ordering::Equal
-        }
+        let na = a.page_num;
+        let nb = b.page_num;
+        na.cmp(&nb)
     });
-    // pages.sort_by_key(|p| p.header.usn);
 
     for h in pages {
-        if h.num_and_such & V10_PAGE_MAGIC_MASK == V10_PAGE_MAGIC_MASK {
-            let active = (h.num_and_such >> 16) as u8;
-            let page = h.num_and_such as u8;
-            println!("page {page:02}, active {active:02x}");
-        }
+        println!("{h}");
     }
+    println!();
 
-    for i in 0..960 {
+    // first page has MFS magic and some sort of metadata
+    let mut i = 0;
+    loop {
         let pos = p0 * V10_PAGE_SIZE + V10_PAGE_HEADER_SIZE + i * V10_SMTH_SIZE;
         let smth = V10PageSmth::read_from_prefix(&data[pos..]).unwrap();
-        print!("{i:03}: {smth:04x?}");
+        if smth._0 == 0xffff {
+            // no idea yet how to get the length here
+            break;
+        }
+        // apparently, some special values occur
         let m = match smth._0 {
             0x70dc => "DC",
             0x70cc => "CC",
             0x70c8 => "C8",
             _ => ".",
         };
-        println!("  {m}");
+        println!("{i:03}: {smth:04x?}  {m}");
+        i += 1;
     }
+    println!("{i} entries");
     println!();
 
     Ok(true)

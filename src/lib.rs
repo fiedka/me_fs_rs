@@ -10,7 +10,7 @@ pub mod mfs;
 
 pub use fpt::ME_FPT;
 
-const PARSE_MFS: bool = false;
+const PARSE_MFS: bool = true;
 
 const FTUP: u32 = u32::from_be_bytes(*b"FTUP");
 const DLMP: u32 = u32::from_be_bytes(*b"DLMP");
@@ -20,6 +20,7 @@ const MDMV: u32 = u32::from_be_bytes(*b"MDMV");
 
 const MFS: u32 = u32::from_be_bytes(*b"MFS\0");
 const AFSP: u32 = u32::from_be_bytes(*b"AFSP");
+const EFFS: u32 = u32::from_be_bytes(*b"EFFS");
 
 fn dump48(data: &[u8]) {
     println!("Here are the first 48 bytes:");
@@ -120,7 +121,7 @@ pub fn parse(data: &[u8]) -> Result<ME_FPT, String> {
                             }
                         }
                     }
-                    MFS | AFSP => {
+                    MFS | AFSP | EFFS => {
                         if PARSE_MFS {
                             if let Err(e) = mfs::parse(&data[o..o + s]) {
                                 println!("MFS: {e}");

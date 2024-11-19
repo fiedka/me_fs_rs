@@ -1,3 +1,4 @@
+use core::mem::size_of;
 use std::fs::{create_dir_all, File};
 use std::io::prelude::*;
 use std::path::Path;
@@ -16,9 +17,13 @@ const DEBUG_FAT: bool = true;
 const VERBOSE: bool = true;
 
 // see https://live.ructf.org/intel_me.pdf slide 35
-const PAGE_MAGIC: u32 = 0xaa55_7887;
+// https://www.blackhat.com/docs/eu-17/materials/eu-17-Sklyarov-Intel-ME-Flash-File-System-Explained.pdf
+const V11_PAGE_MAGIC: u32 = 0xaa55_7887;
+const V11_PAGE_SIZE: usize = 0x2000;
 
-const PAGE_SIZE: usize = 0x2000;
+// also V8 and V9...
+const V10_PAGE_MAGIC_MASK: u32 = 0xfff0_7800;
+const V10_PAGE_SIZE: usize = 0x4000;
 
 // NOTE: We cannot use std::mem::size_of::<PageHeader>() here because it is
 // larger than the underlying data.
@@ -41,9 +46,7 @@ const SLOT_UNUSED: u16 = 0xffff;
 const SLOT_LAST: u16 = 0x7fff;
 
 const VOL_MAGIC: u32 = 0x724F_6201;
-// NOTE: We cannot use std::mem::size_of::<VolHeader>() here because it is
-// larger than the underlying data.
-const VOL_HEADER_SIZE: usize = 14;
+const VOL_HEADER_SIZE: usize = size_of::<VolHeader>();
 
 #[derive(FromBytes, FromZeroes, Serialize, Deserialize, Clone, Copy, Debug)]
 #[repr(C)]
@@ -85,7 +88,7 @@ pub struct DataPage {
 }
 
 #[derive(FromBytes, FromZeroes, Serialize, Deserialize, Clone, Copy, Debug)]
-#[repr(C)]
+#[repr(C, packed)]
 pub struct VolHeader {
     pub magic: [u8; 4],
     pub version: u32,
@@ -527,9 +530,11 @@ fn walk_dir(
     }
 }
 
-pub fn parse(data: &[u8]) -> Result<bool, String> {
+fn parse_v11(data: &[u8]) -> Result<bool, String> {
     let size = data.len();
-    let n_pages = size / PAGE_SIZE;
+    println!("Trying to parse MFS v11, size: {size:08x}");
+
+    let n_pages = size / V11_PAGE_SIZE;
     let n_sys_pages = n_pages / 12;
     let n_data_pages = n_pages - n_sys_pages - 1;
     let n_data_chunks = n_data_pages * DATA_PAGE_CHUNKS;
@@ -539,9 +544,9 @@ pub fn parse(data: &[u8]) -> Result<bool, String> {
     let mut sys_pages = Vec::<SysPage>::new();
     let mut blank_page = 0;
 
-    for pos in (0..size).step_by(PAGE_SIZE) {
-        let slice = &data[pos..pos + PAGE_SIZE];
-        if u32::read_from_prefix(slice).unwrap() == PAGE_MAGIC {
+    for pos in (0..size).step_by(V11_PAGE_SIZE) {
+        let slice = &data[pos..pos + V11_PAGE_SIZE];
+        if u32::read_from_prefix(slice).unwrap() == V11_PAGE_MAGIC {
             let header = PageHeader::read_from_prefix(slice).unwrap();
             // The first chunk tells other whether it's a data or system page.
             let fc = header.first_chunk;
@@ -708,6 +713,103 @@ pub fn parse(data: &[u8]) -> Result<bool, String> {
             walk_dir(&chunks, n_sys_chunks, &fat, vh.files, home_dir, 28);
         }
     }
+    Ok(true)
+}
+
+const V10_MAGIC: u32 = u32::from_le_bytes(*b"MFS\0");
+
+#[derive(FromBytes, FromZeroes, Serialize, Deserialize, Clone, Copy, Debug)]
+#[repr(C)]
+pub struct V10PageHeader {
+    pub num_and_such: u32,
+    pub all_0: u32,
+    pub magic: [u8; 4],
+    pub smth: u32,
+    pub all_f: u32,
+}
+
+const V10_PAGE_HEADER_SIZE: usize = size_of::<V10PageHeader>();
+
+#[derive(FromBytes, FromZeroes, Serialize, Deserialize, Clone, Copy, Debug)]
+#[repr(C, packed)]
+pub struct V10PageSmth {
+    pub _0: u16,
+    pub _2: u16,
+    pub _4: u16,
+    pub _8: u16,
+    pub _a: u16,
+    pub _c: u8,
+}
+
+const V10_SMTH_SIZE: usize = size_of::<V10PageSmth>();
+
+fn parse_v10(data: &[u8]) -> Result<bool, String> {
+    let size = data.len();
+    println!("Trying to parse MFS v10, size: {size:08x}");
+
+    let mut pages = Vec::<V10PageHeader>::new();
+    let mut p0 = 0;
+
+    for pos in (0..size).step_by(V10_PAGE_SIZE) {
+        let slice = &data[pos..pos + V10_PAGE_SIZE];
+        let Some(h) = V10PageHeader::read_from_prefix(slice) else {
+            return Err(format!("could not read header of page @ {pos:08x}"));
+        };
+
+        let m = u32::from_le_bytes(h.magic);
+        if m == V10_MAGIC {
+            p0 = pos / V10_PAGE_SIZE;
+        }
+
+        pages.push(h);
+    }
+
+    pages.sort_by(|a, b| {
+        let na = a.num_and_such as u8;
+        let nb = b.num_and_such as u8;
+        if na > nb {
+            core::cmp::Ordering::Greater
+        } else if nb > na {
+            core::cmp::Ordering::Less
+        } else {
+            core::cmp::Ordering::Equal
+        }
+    });
+    // pages.sort_by_key(|p| p.header.usn);
+
+    for h in pages {
+        if h.num_and_such & V10_PAGE_MAGIC_MASK == V10_PAGE_MAGIC_MASK {
+            let active = (h.num_and_such >> 16) as u8;
+            let page = h.num_and_such as u8;
+            println!("page {page:02}, active {active:02x}");
+        }
+    }
+
+    for i in 0..960 {
+        let pos = p0 * V10_PAGE_SIZE + V10_PAGE_HEADER_SIZE + i * V10_SMTH_SIZE;
+        let smth = V10PageSmth::read_from_prefix(&data[pos..]).unwrap();
+        print!("{i:03}: {smth:04x?}");
+        let m = match smth._0 {
+            0x70dc => "DC",
+            0x70cc => "CC",
+            0x70c8 => "C8",
+            _ => ".",
+        };
+        println!("  {m}");
+    }
+    println!();
 
     Ok(true)
+}
+
+pub fn parse(data: &[u8]) -> Result<bool, String> {
+    // TODO: This is just a heuristic.
+    let t = &data[0..4];
+    if let Some(m) = u32::read_from_prefix(t) {
+        if m & V10_PAGE_MAGIC_MASK == V10_PAGE_MAGIC_MASK {
+            return parse_v10(data);
+        }
+    }
+
+    parse_v11(data)
 }

@@ -19,12 +19,12 @@ const VERBOSE: bool = true;
 
 // see https://live.ructf.org/intel_me.pdf slide 35
 // https://www.blackhat.com/docs/eu-17/materials/eu-17-Sklyarov-Intel-ME-Flash-File-System-Explained.pdf
-const V11_PAGE_MAGIC: u32 = 0xaa55_7887;
-const V11_PAGE_SIZE: usize = 0x2000;
+const GEN3_PAGE_MAGIC: u32 = 0xaa55_7887;
+const GEN3_PAGE_SIZE: usize = 0x2000;
 
 // also V8 and V9...
-const V10_PAGE_MAGIC_MASK: u32 = 0xfff0_7800;
-const V10_PAGE_SIZE: usize = 0x4000;
+const GEN2_PAGE_MAGIC_MASK: u32 = 0xfff0_7800;
+const GEN2_PAGE_SIZE: usize = 0x4000;
 
 // NOTE: We cannot use std::mem::size_of::<PageHeader>() here because it is
 // larger than the underlying data.
@@ -531,11 +531,11 @@ fn walk_dir(
     }
 }
 
-fn parse_v11(data: &[u8]) -> Result<bool, String> {
+fn parse_gen3(data: &[u8]) -> Result<bool, String> {
     let size = data.len();
-    println!("Trying to parse MFS v11, size: {size:08x}");
+    println!("Trying to parse MFS for Gen 3, size: {size:08x}");
 
-    let n_pages = size / V11_PAGE_SIZE;
+    let n_pages = size / GEN3_PAGE_SIZE;
     let n_sys_pages = n_pages / 12;
     let n_data_pages = n_pages - n_sys_pages - 1;
     let n_data_chunks = n_data_pages * DATA_PAGE_CHUNKS;
@@ -545,9 +545,9 @@ fn parse_v11(data: &[u8]) -> Result<bool, String> {
     let mut sys_pages = Vec::<SysPage>::new();
     let mut blank_page = 0;
 
-    for pos in (0..size).step_by(V11_PAGE_SIZE) {
-        let slice = &data[pos..pos + V11_PAGE_SIZE];
-        if u32::read_from_prefix(slice).unwrap() == V11_PAGE_MAGIC {
+    for pos in (0..size).step_by(GEN3_PAGE_SIZE) {
+        let slice = &data[pos..pos + GEN3_PAGE_SIZE];
+        if u32::read_from_prefix(slice).unwrap() == GEN3_PAGE_MAGIC {
             let header = PageHeader::read_from_prefix(slice).unwrap();
             // The first chunk tells other whether it's a data or system page.
             let fc = header.first_chunk;
@@ -717,11 +717,11 @@ fn parse_v11(data: &[u8]) -> Result<bool, String> {
     Ok(true)
 }
 
-const V10_MAGIC: u32 = u32::from_le_bytes(*b"MFS\0");
+const GEN2_MAGIC: u32 = u32::from_le_bytes(*b"MFS\0");
 
 #[derive(FromBytes, FromZeroes, Serialize, Deserialize, Clone, Copy, Debug)]
 #[repr(C)]
-pub struct V10PageHeader {
+pub struct Gen2PageHeader {
     pub page_num: u8,
     pub _1: u8, // ff
     pub page_flag: u8,
@@ -732,7 +732,7 @@ pub struct V10PageHeader {
     pub all_f: u32,
 }
 
-impl Display for V10PageHeader {
+impl Display for Gen2PageHeader {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let num = self.page_num;
         let flag = self.page_flag;
@@ -743,73 +743,233 @@ impl Display for V10PageHeader {
     }
 }
 
-const V10_PAGE_HEADER_SIZE: usize = size_of::<V10PageHeader>();
+const GEN2_PAGE_HEADER_SIZE: usize = size_of::<Gen2PageHeader>();
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[repr(C)]
+pub struct Gen2Page {
+    pub header: Gen2PageHeader,
+    // pub indices: Gen2Indices,
+    pub chunks: Vec<Gen2Chunk>,
+    pub offset: usize,
+}
+
+impl Gen2Page {
+    pub fn is_active(&self) -> bool {
+        let n = self.header.page_num;
+        n != 0x00 && n != 0xff
+    }
+}
 
 #[derive(FromBytes, FromZeroes, Serialize, Deserialize, Clone, Copy, Debug)]
 #[repr(C, packed)]
-pub struct V10PageSmth {
-    pub _0: u16,
-    pub _2: u16,
-    pub _4: u16,
-    pub _8: u16,
-    pub _a: u16,
-    pub _c: u8,
+pub struct Gen2ChunkHeader {
+    pub flags: u8,
+    pub size: u8,
 }
 
-const V10_SMTH_SIZE: usize = size_of::<V10PageSmth>();
-
-fn parse_v10(data: &[u8]) -> Result<bool, String> {
-    let size = data.len();
-    println!("Trying to parse MFS v10, size: {size:08x}");
-
-    let mut pages = Vec::<V10PageHeader>::new();
-    let mut p0 = 0;
-
-    for pos in (0..size).step_by(V10_PAGE_SIZE) {
-        let slice = &data[pos..pos + V10_PAGE_SIZE];
-        let Some(h) = V10PageHeader::read_from_prefix(slice) else {
-            return Err(format!("could not read header of page @ {pos:08x}"));
-        };
-
-        let m = u32::from_le_bytes(h.magic);
-        if m == V10_MAGIC {
-            p0 = pos / V10_PAGE_SIZE;
-        }
-
-        pages.push(h);
+impl Display for Gen2ChunkHeader {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let fl = self.flags;
+        // looks like the first bits are _always_ `10`.
+        let f0 = (fl >> 4) & 0b11;
+        let f1 = fl & 0b1111;
+        let sz = self.size;
+        write!(f, "{f0:02b} {f1:04b} {sz:3}")
     }
+}
 
-    pages.sort_by(|a, b| {
-        let na = a.page_num;
-        let nb = b.page_num;
-        na.cmp(&nb)
-    });
+#[derive(FromBytes, FromZeroes, Serialize, Deserialize, Clone, Copy, Debug)]
+#[repr(C, packed)]
+pub struct Gen2Chunk {
+    pub header: Gen2ChunkHeader,
+    pub offset: usize,
+}
 
-    for h in pages {
-        println!("{h}");
+impl Display for Gen2Chunk {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let h = self.header;
+        // TODO: offset
+        write!(f, "{h}")
     }
-    println!();
+}
 
-    // first page has MFS magic and some sort of metadata
-    let mut i = 0;
-    loop {
-        let pos = p0 * V10_PAGE_SIZE + V10_PAGE_HEADER_SIZE + i * V10_SMTH_SIZE;
-        let smth = V10PageSmth::read_from_prefix(&data[pos..]).unwrap();
-        if smth._0 == 0xffff {
-            // no idea yet how to get the length here
-            break;
-        }
-        // apparently, some special values occur
-        let m = match smth._0 {
+impl Gen2Chunk {
+    pub fn is_active(&self) -> bool {
+        self.header.flags & 0b1111 == 0
+    }
+}
+
+#[derive(FromBytes, FromZeroes, Serialize, Deserialize, Clone, Copy, Debug)]
+#[repr(C, packed)]
+pub struct Gen2PageSmth {
+    pub _0: u16,
+    pub _2: u16,
+    pub _4: u32,
+    // pub _6: u16,
+    pub _8: u8,
+    pub _a: u16,
+}
+
+impl Display for Gen2PageSmth {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // apparently, some special values occur frequently
+        let t = self._0;
+        let m = match t {
             0x70dc => "DC",
             0x70cc => "CC",
             0x70c8 => "C8",
             _ => ".",
         };
-        println!("{i:03}: {smth:04x?}  {m}");
-        i += 1;
+        let s = self._2;
+        let c = self._4;
+        let v = self._8;
+        let x = self._a;
+        write!(f, "{t:04x} {s:04x} {c:08x} {v:02x} {x:04x}  {m}")
     }
-    println!("{i} entries");
+}
+
+#[derive(FromBytes, FromZeroes, Clone, Copy, Debug)]
+#[repr(C, packed)]
+pub struct Gen2Indices([u8; 0x40]);
+
+const GEN2_SMTH_SIZE: usize = size_of::<Gen2PageSmth>();
+
+fn parse_gen2(data: &[u8]) -> Result<bool, String> {
+    let size = data.len();
+    println!("Trying to parse MFS for Gen 2, size: {size:08x}");
+
+    let mut pages = Vec::<Gen2Page>::new();
+    let mut index = Vec::<Gen2PageSmth>::new();
+
+    for offset in (0..size).step_by(GEN2_PAGE_SIZE) {
+        let slice = &data[offset..offset + GEN2_PAGE_SIZE];
+        let Some(header) = Gen2PageHeader::read_from_prefix(slice) else {
+            return Err(format!("could not read header of page @ {offset:08x}"));
+        };
+
+        let mut chunks = Vec::<Gen2Chunk>::new();
+
+        let mut pos = 0xd0;
+
+        let n = header.page_num;
+        if n > 0 && n != 0xff {
+            println!("page {n:03}: read chunks...");
+            loop {
+                if pos >= GEN2_PAGE_SIZE {
+                    println!("page {n:03}: read all chunks, reached {pos:08x}");
+                    break;
+                }
+                let o = offset + pos;
+                let ch = Gen2ChunkHeader::read_from_prefix(&data[o..]).unwrap();
+                if ch.flags == 0xff || ch.size == 0 {
+                    println!("page {n:03}: break reading chunks, reached {pos:08x}, {ch}");
+                    break;
+                }
+                let size = if ch.size > 2 && ch.flags != 0xb0 {
+                    let s = ch.size as usize;
+                    // chunks are 16-byte aligned, filled with 0xff to the end
+                    let sm = s % 16;
+                    if sm == 0 {
+                        s
+                    } else {
+                        s + 16 - sm
+                    }
+                } else {
+                    ch.size as usize * 0x100
+                };
+                pos += size;
+                let c = Gen2Chunk {
+                    header: ch,
+                    offset: pos,
+                };
+                chunks.push(c);
+            }
+        } else {
+            println!("page {n:03}: no chunks to read");
+        }
+
+        let p = Gen2Page {
+            header,
+            chunks,
+            offset,
+        };
+
+        pages.push(p);
+    }
+
+    pages.sort_by(|a, b| {
+        let na = a.header.page_num;
+        let nb = b.header.page_num;
+        na.cmp(&nb)
+    });
+
+    for p in &pages {
+        let h = p.header;
+        println!("{h} @ {:08x}, {} chunks", p.offset, p.chunks.len());
+
+        if p.is_active() {
+            let d = Gen2Indices::read_from_prefix(&data[p.offset + 0x90..]).unwrap();
+            for b in (0..0x40).step_by(0x10) {
+                println!("    {:02x?}", &d.0[b..b + 0x10]);
+            }
+            let fc: Vec<Gen2Chunk> = p
+                .chunks
+                .clone()
+                .into_iter()
+                .filter(|c| c.is_active())
+                .collect();
+            println!("{} active chunks", fc.len());
+
+            for (i, c) in p.chunks.iter().enumerate() {
+                if i % 8 == 0 {
+                    println!();
+                }
+                print!("   {c}");
+            }
+            println!();
+        }
+        println!();
+    }
+    println!("{} pages", pages.len());
+    println!();
+
+    // first page has MFS magic and some sort of metadata
+    let mut i = 0;
+    if let Some(p0) = pages.first() {
+        let m = u32::from_le_bytes(p0.header.magic);
+        if m != GEN2_MAGIC {
+            println!("Gen2 MFS: page 0 does not have expected magic");
+        } else {
+            loop {
+                let pos = p0.offset + GEN2_PAGE_HEADER_SIZE + i * GEN2_SMTH_SIZE;
+                let smth = Gen2PageSmth::read_from_prefix(&data[pos..]).unwrap();
+                if smth._0 == 0xffff {
+                    // no idea yet how to get the length here
+                    break;
+                }
+                index.push(smth);
+                i += 1;
+            }
+        }
+    }
+
+    index.sort_by(|a, b| {
+        let na = a._2;
+        let nb = b._2;
+        na.cmp(&nb)
+    });
+    index.sort_by(|a, b| {
+        let na = a._0;
+        let nb = b._0;
+        na.cmp(&nb)
+    });
+
+    for (i, s) in index.iter().enumerate() {
+        println!("{i:03}: {s}");
+    }
+
+    println!("{} entries", index.len());
     println!();
 
     Ok(true)
@@ -819,10 +979,10 @@ pub fn parse(data: &[u8]) -> Result<bool, String> {
     // TODO: This is just a heuristic.
     let t = &data[0..4];
     if let Some(m) = u32::read_from_prefix(t) {
-        if m & V10_PAGE_MAGIC_MASK == V10_PAGE_MAGIC_MASK {
-            return parse_v10(data);
+        if m & GEN2_PAGE_MAGIC_MASK == GEN2_PAGE_MAGIC_MASK {
+            return parse_gen2(data);
         }
     }
 
-    parse_v11(data)
+    parse_gen3(data)
 }

@@ -775,7 +775,11 @@ impl Display for Gen2ChunkHeader {
         let f0 = (fl >> 4) & 0b11;
         let f1 = fl & 0b1111;
         let sz = self.size;
-        write!(f, "{f0:02b} {f1:04b} {sz:3}")
+        let fb = match f1 {
+            0b0000 => "  A ".to_string(),
+            _ => format!("{f1:04b}"),
+        };
+        write!(f, "{f0:02b} {fb} {sz:3}")
     }
 }
 

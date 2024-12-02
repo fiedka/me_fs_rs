@@ -7,7 +7,7 @@ use std::str::from_utf8;
 
 use serde::{Deserialize, Serialize};
 use serde_big_array::BigArray;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use zerocopy::FromBytes;
 use zerocopy_derive::{FromBytes, FromZeroes};
 
@@ -106,6 +106,12 @@ struct DirEntry {
     gid: u16,
     salt: u16,
     name: [u8; 12],
+}
+
+impl DirEntry {
+    pub fn is_dir(&self) -> bool {
+        self.mode & VFS_DIRECTORY > 0
+    }
 }
 
 const DIR_ENTRY_SIZE: usize = 24;
@@ -252,6 +258,10 @@ fn parse_sys_chunks(data: &[u8]) -> Result<(Chunks, usize, usize), String> {
 const FILE_NONE: u16 = 0x0000;
 const FILE_EMPTY: u16 = 0xffff;
 
+fn is_inode_active(inode: u16) -> bool {
+    inode != FILE_NONE && inode != FILE_EMPTY
+}
+
 fn get_file(
     chunks: &Chunks,
     n_sys_chunks: u16,
@@ -260,7 +270,7 @@ fn get_file(
     file_index: u32,
 ) -> Result<Vec<u8>, String> {
     let mut i_node = fat[file_index as usize];
-    if VERBOSE && i_node != FILE_EMPTY && i_node != FILE_NONE {
+    if VERBOSE && is_inode_active(i_node) {
         println!("  file {file_index:04} iNode {i_node:04x}");
     }
     if i_node == FILE_EMPTY {
@@ -404,6 +414,8 @@ fn check_dir_sec(sec: &BlobSec) -> Result<(), String> {
 // TODO: Why 0xfff ?
 const FILE_INDEX_MASK: u32 = 0xfff;
 
+const FALLBACK_WALK_BROKEN_DIR: bool = false;
+
 fn get_blob(
     chunks: &Chunks,
     n_sys_chunks: u16,
@@ -485,7 +497,7 @@ fn get_blob(
             let n = n.split("\0").collect::<Vec<&str>>()[0];
             let fi = f.file_no & FILE_INDEX_MASK;
             let next_path = path.join(Path::new(n));
-            if f.mode & VFS_DIRECTORY > 0 {
+            if f.is_dir() {
                 if PRINT {
                     println!();
                 }
@@ -500,7 +512,7 @@ fn get_blob(
             let fi = f.file_no & FILE_INDEX_MASK;
             let i_node = fat[fi as usize];
             let next_path = path.join(Path::new("xxx"));
-            if false && f.mode & VFS_DIRECTORY > 0 && i_node != FILE_NONE && i_node != FILE_EMPTY {
+            if FALLBACK_WALK_BROKEN_DIR && f.is_dir() && is_inode_active(i_node) {
                 walk_dir(chunks, n_sys_chunks, fat, n_files, &next_path, fi);
             } else {
                 println!("NOT A VALID DIR");
@@ -779,7 +791,8 @@ impl Display for Gen2ChunkHeader {
             0b0000 => "  A ".to_string(),
             _ => format!("{f1:04b}"),
         };
-        write!(f, "{f0:02b} {fb} {sz:3}")
+        let id = fl & 0b111111;
+        write!(f, "{id:02x} {f0:02b} {fb} {sz:3}")
     }
 }
 
@@ -808,28 +821,45 @@ impl Gen2Chunk {
 #[repr(C, packed)]
 pub struct Gen2PageSmth {
     pub _0: u16,
-    pub _2: u16,
-    pub _4: u32,
-    // pub _6: u16,
-    pub _8: u8,
-    pub _a: u16,
+    pub id: u8,
+    pub _3: u16,
+    pub _5: u16,
+    pub _7: u16,
+    pub _9: u16,
 }
 
 impl Display for Gen2PageSmth {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // apparently, some special values occur frequently
         let t = self._0;
+        let id = self.id;
+        let d = self._3;
+        let v = self._5;
+        let c = self._7;
+        let x = self._9;
+
         let m = match t {
             0x70dc => "DC",
             0x70cc => "CC",
             0x70c8 => "C8",
-            _ => ".",
+            _ => "..",
         };
-        let s = self._2;
-        let c = self._4;
-        let v = self._8;
-        let x = self._a;
-        write!(f, "{t:04x} {s:04x} {c:08x} {v:02x} {x:04x}  {m}")
+
+        let ff = 0xffff;
+        let xor = format!(
+            "{:04x} {:02x} {:04x} {:04x} {:04x} {:04x}",
+            t ^ ff,
+            id ^ 0xff,
+            d ^ ff,
+            v ^ ff,
+            c ^ ff,
+            x ^ ff
+        );
+
+        write!(
+            f,
+            "{t:04x}  {id:02x}  {d:04x} {v:04x} {c:04x} {x:04x}  {m}  {xor}"
+        )
     }
 }
 
@@ -867,8 +897,10 @@ fn parse_gen2(data: &[u8]) -> Result<bool, String> {
                 let o = offset + pos;
                 let ch = Gen2ChunkHeader::read_from_prefix(&data[o..]).unwrap();
                 if ch.flags == 0xff || ch.size == 0 {
-                    println!("page {n:03}: break reading chunks, reached {pos:08x}, {ch}");
-                    break;
+                    println!("page {n:03}: no chunk @ {pos:08x}, {ch}");
+                    // break;
+                    pos += 16;
+                    continue;
                 }
                 let size = if ch.size > 2 && ch.flags != 0xb0 {
                     let s = ch.size as usize;
@@ -882,12 +914,26 @@ fn parse_gen2(data: &[u8]) -> Result<bool, String> {
                 } else {
                     ch.size as usize * 0x100
                 };
-                pos += size;
                 let c = Gen2Chunk {
                     header: ch,
                     offset: pos,
                 };
                 chunks.push(c);
+
+                if ch.flags == 0xb0 {
+                    let x8 = &data[o + 2..o + 10];
+                    // NOTE: 3rd byte is always 0x00
+                    // Examples:
+                    // b0: [0b, 05, 00, 04, 00, 00, 00, 00]
+                    // b0: [0b, 12, 00, 00, 00, 00, 00, 00]
+                    // b0: [0c, 00, 00, e0, 7a, 33, 95, 52]
+                    // b0: [0d, 00, 00, 87, 54, 7d, d8, ec]
+                    // b0: [14, 05, 00, 00, ff, ff, ff, ff]
+                    // b0: [14, 10, 00, 00, 0c, 00, 00, 04]
+                    // b0: [14, 1d, 00, 00, e7, 03, 00, 00]
+                    println!("b0: {x8:02x?}");
+                }
+                pos += size;
             }
         } else {
             println!("page {n:03}: no chunks to read");
@@ -908,12 +954,19 @@ fn parse_gen2(data: &[u8]) -> Result<bool, String> {
         na.cmp(&nb)
     });
 
+    let mut total_chunks = 0;
+    let mut active_chunks = 0;
     for p in &pages {
         let h = p.header;
-        println!("{h} @ {:08x}, {} chunks", p.offset, p.chunks.len());
+        let cs = p.chunks.len();
+        let po = p.offset;
+        println!("{h} @ {po:08x}, {cs} chunks");
+        total_chunks += cs;
 
         if p.is_active() {
-            let d = Gen2Indices::read_from_prefix(&data[p.offset + 0x90..]).unwrap();
+            // TODO: evaluate header length, separate from page 0
+            const PAGE_HEADER_LENGTH: usize = 0x90;
+            let d = Gen2Indices::read_from_prefix(&data[po + PAGE_HEADER_LENGTH..]).unwrap();
             for b in (0..0x40).step_by(0x10) {
                 println!("    {:02x?}", &d.0[b..b + 0x10]);
             }
@@ -923,7 +976,9 @@ fn parse_gen2(data: &[u8]) -> Result<bool, String> {
                 .into_iter()
                 .filter(|c| c.is_active())
                 .collect();
-            println!("{} active chunks", fc.len());
+            let acs = fc.len();
+            println!("{acs} active chunks");
+            active_chunks += acs;
 
             for (i, c) in p.chunks.iter().enumerate() {
                 if i % 8 == 0 {
@@ -935,7 +990,8 @@ fn parse_gen2(data: &[u8]) -> Result<bool, String> {
         }
         println!();
     }
-    println!("{} pages", pages.len());
+    let ps = pages.len();
+    println!("{ps} pages, {total_chunks} chunks total, {active_chunks} active");
     println!();
 
     // first page has MFS magic and some sort of metadata
@@ -958,22 +1014,31 @@ fn parse_gen2(data: &[u8]) -> Result<bool, String> {
         }
     }
 
-    index.sort_by(|a, b| {
-        let na = a._2;
-        let nb = b._2;
-        na.cmp(&nb)
-    });
+    /*
     index.sort_by(|a, b| {
         let na = a._0;
         let nb = b._0;
         na.cmp(&nb)
     });
+    index.sort_by(|a, b| {
+        let na = a._9;
+        let nb = b._9;
+        na.cmp(&nb)
+    });
+    index.sort_by(|a, b| {
+        let na = a.id;
+        let nb = b.id;
+        na.cmp(&nb)
+    });
+    */
 
     for (i, s) in index.iter().enumerate() {
-        println!("{i:03}: {s}");
+        println!("{i:04}: {s}");
     }
 
-    println!("{} entries", index.len());
+    let unique = index.iter().map(|i| i.id).collect::<HashSet<_>>();
+
+    println!("{} entries, {} unique", index.len(), unique.len());
     println!();
 
     Ok(true)

@@ -66,7 +66,9 @@ const OFFSET_MASK: u32 = 0xffffff;
 
 impl CodePartitionDirectory {
     pub fn new(data: Vec<u8>, offset: usize) -> Result<Self, String> {
-        let header = CPDHeader::read_from_prefix(&data).unwrap();
+        let Some(header) = CPDHeader::read_from_prefix(&data) else {
+            return Err("could not parse CPD header".to_string());
+        };
         let n = header.part_name;
         let name = match std::str::from_utf8(&n) {
             // some names are shorter than 4 bytes and padded with 0x0

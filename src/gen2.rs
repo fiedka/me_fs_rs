@@ -6,6 +6,8 @@ use zerocopy::{FromBytes, Ref};
 use zerocopy_derive::{AsBytes, FromBytes, FromZeroes};
 
 const ENTRY_MAGIC: &[u8] = b"$MME";
+const SIG_LUT: u32 = u32::from_le_bytes(*b"LLUT");
+const SIG_LZMA: u32 = u32::from_le_bytes([0x36, 0x00, 0x40, 0x00]);
 
 // https://github.com/skochinsky/me-tools me_unpack.py MeModuleHeader2
 #[derive(AsBytes, FromBytes, FromZeroes, Serialize, Deserialize, Clone, Copy, Debug)]

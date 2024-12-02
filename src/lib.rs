@@ -32,8 +32,7 @@ fn dump48(data: &[u8]) {
     println!("{b:02x?}");
 }
 
-const SIG_LUT: u32 = u32::from_le_bytes(*b"LLUT");
-const SIG_LZMA: u32 = u32::from_le_bytes([0x36, 0x00, 0x40, 0x00]);
+const SCAN_FOR_ALL_CPDS: bool = false;
 
 pub fn parse(data: &[u8]) -> Result<ME_FPT, String> {
     let debug = false;
@@ -57,19 +56,19 @@ pub fn parse(data: &[u8]) -> Result<ME_FPT, String> {
     let mut gen2dirs = Vec::<gen2::Directory>::new();
     let mut directories = Vec::<cpd::CodePartitionDirectory>::new();
 
-    let mut o = 0;
-    while o + 16 + mem::size_of::<fpt::FPT>() <= data.len() {
-        o += 16;
-        let buf = &data[o..o + 4];
-        if buf.eq(cpd_bytes) {
-            let cpd = cpd::CodePartitionDirectory::new(data[o..].to_vec(), o).unwrap();
-            directories.push(cpd);
+    // Scann for all CPDs (there may be some not listed in FPT)
+    if SCAN_FOR_ALL_CPDS {
+        let mut o = 0;
+        while o < data.len() {
+            let buf = &data[o..o + 4];
+            if buf.eq(cpd_bytes) {
+                let Ok(cpd) = cpd::CodePartitionDirectory::new(data[o..].to_vec(), o) else {
+                    continue;
+                };
+                directories.push(cpd);
+            }
+            o += 16;
         }
-    }
-
-    println!("Scanning for all CPDs:");
-    for d in &directories {
-        println!(" - {:4} @ 0x{:08x}", d.name, d.offset);
     }
 
     let mut base = 0;

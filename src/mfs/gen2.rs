@@ -6,6 +6,10 @@ use std::collections::HashSet;
 use zerocopy::FromBytes;
 use zerocopy_derive::{FromBytes, FromZeroes};
 
+// We compile to Wasm, so this is needed
+// https://gist.github.com/JakeHartnell/2c1fa387f185f5dc46c9429470a2e2be
+#[doc = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/doc/me_gen2_mfs.md"))]
+
 const MAGIC: u32 = u32::from_le_bytes(*b"MFS\0");
 const PAGE_SIZE: usize = 0x4000;
 

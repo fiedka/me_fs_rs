@@ -1,11 +1,9 @@
 use std::mem;
 use zerocopy::FromBytes;
 
-pub mod cpd;
+pub mod dir;
 pub mod fit;
 pub mod fpt;
-pub mod gen2;
-pub mod man;
 pub mod mfs;
 
 pub use fpt::ME_FPT;
@@ -51,10 +49,10 @@ pub fn parse(data: &[u8]) -> Result<ME_FPT, String> {
     }
     println!();
 
-    let cpd_bytes = cpd::CPD_MAGIC.as_bytes();
+    let cpd_bytes = dir::gen3::CPD_MAGIC.as_bytes();
     let mut entries = Vec::<fpt::FPTEntry>::new();
-    let mut gen2dirs = Vec::<gen2::Directory>::new();
-    let mut directories = Vec::<cpd::CodePartitionDirectory>::new();
+    let mut gen2dirs = Vec::<dir::gen2::Directory>::new();
+    let mut directories = Vec::<dir::gen3::CodePartitionDirectory>::new();
 
     // Scann for all CPDs (there may be some not listed in FPT)
     if SCAN_FOR_ALL_CPDS {
@@ -62,7 +60,7 @@ pub fn parse(data: &[u8]) -> Result<ME_FPT, String> {
         while o < data.len() {
             let buf = &data[o..o + 4];
             if buf.eq(cpd_bytes) {
-                let Ok(cpd) = cpd::CodePartitionDirectory::new(data[o..].to_vec(), o) else {
+                let Ok(cpd) = dir::gen3::CodePartitionDirectory::new(data[o..].to_vec(), o) else {
                     continue;
                 };
                 directories.push(cpd);
@@ -105,12 +103,13 @@ pub fn parse(data: &[u8]) -> Result<ME_FPT, String> {
                         if o + 4 < data.len() {
                             let buf = &data[o..o + 4];
                             if buf.eq(cpd_bytes) {
-                                if let Ok(cpd) =
-                                    cpd::CodePartitionDirectory::new(data[o..o + s].to_vec(), o)
-                                {
+                                if let Ok(cpd) = dir::gen3::CodePartitionDirectory::new(
+                                    data[o..o + s].to_vec(),
+                                    o,
+                                ) {
                                     directories.push(cpd);
                                 }
-                            } else if let Ok(dir) = gen2::Directory::new(&data[o..], o) {
+                            } else if let Ok(dir) = dir::gen2::Directory::new(&data[o..], o) {
                                 gen2dirs.push(dir);
                             } else {
                                 println!("{name} @ {o:08x} has no CPD signature");
@@ -131,7 +130,7 @@ pub fn parse(data: &[u8]) -> Result<ME_FPT, String> {
                         if n != FTUP && o + 4 < data.len() {
                             let buf = &data[o..o + 4];
                             if let Ok(sig) = std::str::from_utf8(buf) {
-                                if sig == cpd::CPD_MAGIC {
+                                if sig == dir::gen3::CPD_MAGIC {
                                     println!("Unknown $CPD in {name} @ 0x{o:08x} (0x{s:08x}).");
                                     continue;
                                 }
@@ -141,7 +140,7 @@ pub fn parse(data: &[u8]) -> Result<ME_FPT, String> {
                         if debug {
                             dump48(&data[o..]);
                         }
-                        if let Ok(m) = man::Manifest::new(&data[o..]) {
+                        if let Ok(m) = dir::man::Manifest::new(&data[o..]) {
                             println!("MANIFEST; {m}");
                         }
                     }

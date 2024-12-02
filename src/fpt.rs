@@ -2,8 +2,8 @@ use core::fmt::{self, Display};
 use serde::{Deserialize, Serialize};
 use zerocopy_derive::{AsBytes, FromBytes, FromZeroes};
 
-use crate::cpd::CodePartitionDirectory;
-use crate::gen2::Directory as Gen2Directory;
+use crate::dir::gen2::Directory as Gen2Directory;
+use crate::dir::gen3::CodePartitionDirectory;
 
 // see https://github.com/peterbjornx/meimagetool ...intelme/model/fpt/ (Java)
 // and https://github.com/linuxboot/fiano/blob/main/pkg/intel/me/structures.go

@@ -1,4 +1,4 @@
-use crate::man::{self, Manifest};
+use crate::dir::man::{self, Manifest};
 use core::fmt::{self, Display};
 use serde::{Deserialize, Serialize};
 use std::str::from_utf8;

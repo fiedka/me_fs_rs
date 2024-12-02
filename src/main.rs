@@ -1,6 +1,7 @@
 use clap::Parser;
 use me_fs_rs::{
-    cpd::CodePartitionDirectory, fpt::FPTEntry, gen2::Directory as Gen2Dir, parse, ME_FPT,
+    dir::gen2::Directory as Gen2Dir, dir::gen3::CodePartitionDirectory, fpt::FPTEntry, parse,
+    ME_FPT,
 };
 use std::fs;
 use std::io;

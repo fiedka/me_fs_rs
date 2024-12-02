@@ -1,4 +1,4 @@
-use crate::man::Manifest;
+use crate::dir::man::Manifest;
 use core::fmt::{self, Display};
 use serde::{Deserialize, Serialize};
 use zerocopy::FromBytes;

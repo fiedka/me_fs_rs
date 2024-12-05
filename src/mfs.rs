@@ -13,7 +13,8 @@ pub fn parse(data: &[u8]) -> Result<bool, String> {
     let t = &data[0..4];
     if let Some(m) = u32::read_from_prefix(t) {
         if m & GEN2_PAGE_MAGIC_MASK == GEN2_PAGE_MAGIC_MASK {
-            return gen2::parse(data);
+            // TODO: library should not print; remove verbose flag eventually
+            return gen2::parse(data, true);
         }
     }
 

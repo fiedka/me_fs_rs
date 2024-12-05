@@ -12,6 +12,10 @@ name = "me_fs"
 path = "src/main.rs"
 
 [[bin]]
+name = "gen2mfs"
+path = "bin/gen2mfs.rs"
+
+[[bin]]
 name = "csum"
 path = "bin/csum.rs"
 

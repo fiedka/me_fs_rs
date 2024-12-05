@@ -187,7 +187,7 @@ pub struct Indices([u8; 0x40]);
 
 const SMTH_SIZE: usize = size_of::<LogEntry>();
 
-pub fn parse(data: &[u8]) -> Result<bool, String> {
+pub fn parse(data: &[u8], verbose: bool) -> Result<bool, String> {
     let size = data.len();
     println!("Trying to parse MFS for Gen 2, size: {size:08x}");
 
@@ -215,8 +215,11 @@ pub fn parse(data: &[u8]) -> Result<bool, String> {
                 let o = offset + pos;
                 let ch = ChunkHeader::read_from_prefix(&data[o..]).unwrap();
                 if ch.flags == 0xff || ch.size == 0 {
-                    println!("page {n:03}: no chunk @ {pos:08x}, {ch}");
+                    if verbose {
+                        println!("page {n:03}: no chunk @ {pos:08x}, {ch}");
+                    }
                     // break;
+                    // NOTE: those may be "dead" chunks
                     pos += 16;
                     continue;
                 }
@@ -227,7 +230,7 @@ pub fn parse(data: &[u8]) -> Result<bool, String> {
                 };
                 chunks.push(c);
 
-                if ch.flags == 0xb0 {
+                if verbose && ch.flags == 0xb0 {
                     let x8 = &data[o + 2..o + 10];
                     // NOTE: 3rd byte is always 0x00
                     // Examples:

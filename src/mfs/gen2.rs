@@ -233,7 +233,7 @@ pub fn parse(data: &[u8], verbose: bool) -> Result<bool, String> {
                 let ch = ChunkHeader::read_from_prefix(&data[o..]).unwrap();
                 if ch.flags == 0xff || ch.size == 0 {
                     if verbose {
-                        println!("page {n:03}: no chunk @ {pos:08x}, {ch}");
+                        println!("page {n:03}: no chunk @ {pos:08x}");
                     }
                     // break;
                     // NOTE: those may be "dead" chunks

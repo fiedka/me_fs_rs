@@ -6,21 +6,35 @@ use std::collections::HashSet;
 use zerocopy::FromBytes;
 use zerocopy_derive::{FromBytes, FromZeroes};
 
-// We compile to Wasm, so this is needed
-// https://gist.github.com/JakeHartnell/2c1fa387f185f5dc46c9429470a2e2be
-#[doc = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/doc/me_gen2_mfs.md"))]
-
 const MAGIC: u32 = u32::from_le_bytes(*b"MFS\0");
 const PAGE_SIZE: usize = 0x4000;
 
 #[derive(FromBytes, FromZeroes, Serialize, Deserialize, Clone, Copy, Debug)]
 #[repr(C)]
+pub struct PageFlags(u8);
+
+impl Display for PageFlags {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let fl = self.0 & 0xf;
+        // TODO: Those are values seen so far; what do they mean?
+        let fls = match fl {
+            0x7 => "xxx7".to_string(),
+            0xc => "xxxC".to_string(),
+            0xe => "xxxE".to_string(),
+            _ => format!("{fl:04b}"),
+        };
+        write!(f, "{fls}")
+    }
+}
+
+#[derive(FromBytes, FromZeroes, Serialize, Deserialize, Clone, Copy, Debug)]
+#[repr(C)]
 pub struct PageHeader {
-    pub page_num: u8,
-    pub _1: u8, // ff
-    pub page_flag: u8,
-    pub _3: u8, // ff
-    pub all_0: u32,
+    pub num: u8,
+    pub _1: u8, // 78
+    pub flags: PageFlags,
+    pub _3: u8,         // ff
+    pub all_0: u32,     // not always, can be 01. 2b, 29
     pub magic: [u8; 4], // first page only, ffff otherwise
     pub smth: u32,      // first page only, ffff otherwise
     pub all_f: u32,
@@ -28,12 +42,13 @@ pub struct PageHeader {
 
 impl Display for PageHeader {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let num = self.page_num;
-        let flag = self.page_flag;
-        if num == 0xff && flag == 0xff {
+        let num = self.num;
+        // typically f7, fc, or fe
+        let flags = self.flags;
+        if num == 0xff && flags.0 == 0xff {
             return write!(f, "page unused");
         }
-        write!(f, "page {num:02}, flag {flag:08b}")
+        write!(f, "page {num:02}, flag {flags}")
     }
 }
 
@@ -50,7 +65,7 @@ pub struct Page {
 
 impl Page {
     pub fn is_active(&self) -> bool {
-        let n = self.header.page_num;
+        let n = self.header.num;
         n != 0x00 && n != 0xff
     }
 }
@@ -68,13 +83,32 @@ impl Display for ChunkHeader {
         // looks like the first bits are _always_ `10`.
         let f0 = (fl >> 4) & 0b11;
         let f1 = fl & 0b1111;
-        let sz = self.size;
+        let sz = self.size();
+        // does this mean "active"?
         let fb = match f1 {
             0b0000 => "  A ".to_string(),
             _ => format!("{f1:04b}"),
         };
         let id = fl & 0b111111;
-        write!(f, "{id:02x} {f0:02b} {fb} {sz:3}")
+        write!(f, "{id:02x} {f0:02b} {fb} {sz:4}")
+    }
+}
+
+impl ChunkHeader {
+    pub fn size(&self) -> usize {
+        // NOTE: This works _so far_.
+        if self.size > 2 && self.flags != 0xb0 {
+            let s = self.size as usize;
+            // selfunks are 16-byte aligned, filled with 0xff to the end
+            let sm = s % 16;
+            if sm == 0 {
+                s
+            } else {
+                s + 16 - sm
+            }
+        } else {
+            self.size as usize * 0x100
+        }
     }
 }
 
@@ -88,8 +122,9 @@ pub struct Chunk {
 impl Display for Chunk {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let h = self.header;
+        let o = self.offset;
         // TODO: offset
-        write!(f, "{h}")
+        write!(f, "{h} {o:04x}")
     }
 }
 
@@ -101,7 +136,7 @@ impl Chunk {
 
 #[derive(FromBytes, FromZeroes, Serialize, Deserialize, Clone, Copy, Debug)]
 #[repr(C, packed)]
-pub struct PageSmth {
+pub struct LogEntry {
     pub _0: u16,
     pub id: u8,
     pub _3: u16,
@@ -110,7 +145,7 @@ pub struct PageSmth {
     pub _9: u16,
 }
 
-impl Display for PageSmth {
+impl Display for LogEntry {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // apparently, some special values occur frequently
         let t = self._0;
@@ -121,6 +156,7 @@ impl Display for PageSmth {
         let x = self._9;
 
         let m = match t {
+            0x70fc => "FC",
             0x70dc => "DC",
             0x70cc => "CC",
             0x70c8 => "C8",
@@ -149,14 +185,14 @@ impl Display for PageSmth {
 #[repr(C, packed)]
 pub struct Indices([u8; 0x40]);
 
-const SMTH_SIZE: usize = size_of::<PageSmth>();
+const SMTH_SIZE: usize = size_of::<LogEntry>();
 
 pub fn parse(data: &[u8]) -> Result<bool, String> {
     let size = data.len();
     println!("Trying to parse MFS for Gen 2, size: {size:08x}");
 
     let mut pages = Vec::<Page>::new();
-    let mut index = Vec::<PageSmth>::new();
+    let mut log = Vec::<LogEntry>::new();
 
     for offset in (0..size).step_by(PAGE_SIZE) {
         let slice = &data[offset..offset + PAGE_SIZE];
@@ -168,7 +204,7 @@ pub fn parse(data: &[u8]) -> Result<bool, String> {
 
         let mut pos = 0xd0;
 
-        let n = header.page_num;
+        let n = header.num;
         if n > 0 && n != 0xff {
             println!("page {n:03}: read chunks...");
             loop {
@@ -184,18 +220,7 @@ pub fn parse(data: &[u8]) -> Result<bool, String> {
                     pos += 16;
                     continue;
                 }
-                let size = if ch.size > 2 && ch.flags != 0xb0 {
-                    let s = ch.size as usize;
-                    // chunks are 16-byte aligned, filled with 0xff to the end
-                    let sm = s % 16;
-                    if sm == 0 {
-                        s
-                    } else {
-                        s + 16 - sm
-                    }
-                } else {
-                    ch.size as usize * 0x100
-                };
+                let size = ch.size();
                 let c = Chunk {
                     header: ch,
                     offset: pos,
@@ -231,8 +256,8 @@ pub fn parse(data: &[u8]) -> Result<bool, String> {
     }
 
     pages.sort_by(|a, b| {
-        let na = a.header.page_num;
-        let nb = b.header.page_num;
+        let na = a.header.num;
+        let nb = b.header.num;
         na.cmp(&nb)
     });
 
@@ -263,12 +288,12 @@ pub fn parse(data: &[u8]) -> Result<bool, String> {
             active_chunks += acs;
 
             for (i, c) in p.chunks.iter().enumerate() {
-                if i % 8 == 0 {
-                    println!();
+                if i > 0 && i % 8 == 0 {
+                    println!(" |");
                 }
-                print!("   {c}");
+                print!(" | {c}");
             }
-            println!();
+            println!(" |");
         }
         println!();
     }
@@ -285,42 +310,42 @@ pub fn parse(data: &[u8]) -> Result<bool, String> {
         } else {
             loop {
                 let pos = p0.offset + PAGE_HEADER_SIZE + i * SMTH_SIZE;
-                let smth = PageSmth::read_from_prefix(&data[pos..]).unwrap();
+                let smth = LogEntry::read_from_prefix(&data[pos..]).unwrap();
                 if smth._0 == 0xffff {
                     // no idea yet how to get the length here
                     break;
                 }
-                index.push(smth);
+                log.push(smth);
                 i += 1;
             }
         }
     }
 
     /*
-    index.sort_by(|a, b| {
+    log.sort_by(|a, b| {
         let na = a._0;
         let nb = b._0;
         na.cmp(&nb)
     });
-    index.sort_by(|a, b| {
+    log.sort_by(|a, b| {
         let na = a._9;
         let nb = b._9;
         na.cmp(&nb)
     });
-    index.sort_by(|a, b| {
+    log.sort_by(|a, b| {
         let na = a.id;
         let nb = b.id;
         na.cmp(&nb)
     });
     */
 
-    for (i, s) in index.iter().enumerate() {
+    for (i, s) in log.iter().enumerate() {
         println!("{i:04}: {s}");
     }
 
-    let unique = index.iter().map(|i| i.id).collect::<HashSet<_>>();
+    let unique = log.iter().map(|i| i.id).collect::<HashSet<_>>();
 
-    println!("{} entries, {} unique", index.len(), unique.len());
+    println!("{} entries, {} unique", log.len(), unique.len());
     println!();
 
     Ok(true)

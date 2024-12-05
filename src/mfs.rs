@@ -1,5 +1,8 @@
 use zerocopy::FromBytes;
 
+// We compile to Wasm, so this is needed
+// https://gist.github.com/JakeHartnell/2c1fa387f185f5dc46c9429470a2e2be
+#[doc = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/doc/me_gen2_mfs.md"))]
 pub mod gen2;
 pub mod gen3;
 

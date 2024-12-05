@@ -174,9 +174,18 @@ impl Display for LogEntry {
             x ^ ff
         );
 
+        let t0 = t >> 8;
+        let t1 = t & 0xff;
+        let t0a = t0 & 0xf;
+        let t0b = t0 >> 4;
+        let t1a = t1 & 0xf;
+        let t1b = t1 >> 4;
+
+        let tt = format!("{t0a:04b} {t0b:04b} {t1a:04b} {t1b:04b}");
+
         write!(
             f,
-            "{t:04x}  {id:02x}  {d:04x} {v:04x} {c:04x} {x:04x}  {m}  {xor}"
+            "{t:04x} ({tt}) {id:02x}  {d:04x} {v:04x} {c:04x} {x:04x}  {m}  {xor}"
         )
     }
 }
@@ -191,13 +200,17 @@ pub fn parse(data: &[u8], verbose: bool) -> Result<bool, String> {
     let size = data.len();
     println!("Trying to parse MFS for Gen 2, size: {size:08x}");
 
+    if size % PAGE_SIZE != 0 {
+        return Err(format!("Size is not a multiple of page size ({PAGE_SIZE})"));
+    }
+
     let mut pages = Vec::<Page>::new();
     let mut log = Vec::<LogEntry>::new();
 
     for offset in (0..size).step_by(PAGE_SIZE) {
         let slice = &data[offset..offset + PAGE_SIZE];
         let Some(header) = PageHeader::read_from_prefix(slice) else {
-            return Err(format!("could not read header of page @ {offset:08x}"));
+            return Err(format!("Could not read header of page @ {offset:08x}"));
         };
 
         let mut chunks = Vec::<Chunk>::new();
@@ -206,10 +219,14 @@ pub fn parse(data: &[u8], verbose: bool) -> Result<bool, String> {
 
         let n = header.num;
         if n > 0 && n != 0xff {
-            println!("page {n:03}: read chunks...");
+            if verbose {
+                println!("page {n:03}: read chunks...");
+            }
             loop {
                 if pos >= PAGE_SIZE {
-                    println!("page {n:03}: read all chunks, reached {pos:08x}");
+                    if verbose {
+                        println!("page {n:03}: read all chunks, reached {pos:08x}");
+                    }
                     break;
                 }
                 let o = offset + pos;
@@ -245,7 +262,7 @@ pub fn parse(data: &[u8], verbose: bool) -> Result<bool, String> {
                 }
                 pos += size;
             }
-        } else {
+        } else if verbose {
             println!("page {n:03}: no chunks to read");
         }
 
@@ -263,6 +280,56 @@ pub fn parse(data: &[u8], verbose: bool) -> Result<bool, String> {
         let nb = b.header.num;
         na.cmp(&nb)
     });
+
+    // first page has MFS magic and some sort of metadata
+    let mut i = 0;
+    if let Some(p0) = pages.first() {
+        let m = u32::from_le_bytes(p0.header.magic);
+        if m != MAGIC {
+            return Err("Gen2 MFS: page 0 does not have expected magic".to_string());
+        } else {
+            loop {
+                let pos = p0.offset + PAGE_HEADER_SIZE + i * SMTH_SIZE;
+                let smth = LogEntry::read_from_prefix(&data[pos..]).unwrap();
+                if smth._0 == 0xffff {
+                    // no idea yet how to get the length here
+                    break;
+                }
+                log.push(smth);
+                i += 1;
+            }
+        }
+    }
+
+    println!();
+    println!("== Log or smth (page 0)");
+    /*
+    log.sort_by(|a, b| {
+        let na = a._0;
+        let nb = b._0;
+        na.cmp(&nb)
+    });
+    log.sort_by(|a, b| {
+        let na = a._9;
+        let nb = b._9;
+        na.cmp(&nb)
+    });
+    log.sort_by(|a, b| {
+        let na = a.id;
+        let nb = b.id;
+        na.cmp(&nb)
+    });
+    */
+
+    for (i, s) in log.iter().enumerate() {
+        println!("{i:04}: {s}");
+    }
+    println!();
+
+    let unique = log.iter().map(|i| i.id).collect::<HashSet<_>>();
+
+    println!("{} entries, {} unique", log.len(), unique.len());
+    println!();
 
     let mut total_chunks = 0;
     let mut active_chunks = 0;
@@ -302,54 +369,6 @@ pub fn parse(data: &[u8], verbose: bool) -> Result<bool, String> {
     }
     let ps = pages.len();
     println!("{ps} pages, {total_chunks} chunks total, {active_chunks} active");
-    println!();
-
-    // first page has MFS magic and some sort of metadata
-    let mut i = 0;
-    if let Some(p0) = pages.first() {
-        let m = u32::from_le_bytes(p0.header.magic);
-        if m != MAGIC {
-            println!("Gen2 MFS: page 0 does not have expected magic");
-        } else {
-            loop {
-                let pos = p0.offset + PAGE_HEADER_SIZE + i * SMTH_SIZE;
-                let smth = LogEntry::read_from_prefix(&data[pos..]).unwrap();
-                if smth._0 == 0xffff {
-                    // no idea yet how to get the length here
-                    break;
-                }
-                log.push(smth);
-                i += 1;
-            }
-        }
-    }
-
-    /*
-    log.sort_by(|a, b| {
-        let na = a._0;
-        let nb = b._0;
-        na.cmp(&nb)
-    });
-    log.sort_by(|a, b| {
-        let na = a._9;
-        let nb = b._9;
-        na.cmp(&nb)
-    });
-    log.sort_by(|a, b| {
-        let na = a.id;
-        let nb = b.id;
-        na.cmp(&nb)
-    });
-    */
-
-    for (i, s) in log.iter().enumerate() {
-        println!("{i:04}: {s}");
-    }
-
-    let unique = log.iter().map(|i| i.id).collect::<HashSet<_>>();
-
-    println!("{} entries, {} unique", log.len(), unique.len());
-    println!();
 
     Ok(true)
 }

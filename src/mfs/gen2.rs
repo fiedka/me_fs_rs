@@ -58,8 +58,10 @@ const PAGE_HEADER_SIZE: usize = size_of::<PageHeader>();
 #[repr(C)]
 pub struct Page {
     pub header: PageHeader,
-    // pub indices: Indices,
-    pub chunks: Vec<Chunk>,
+    // #[serde(with = "serde_bytes")]
+    // pub indices: [u8; 0x40],
+    pub live_chunks: Vec<Chunk>,
+    pub dead_chunks: Vec<Chunk>,
     pub offset: usize,
 }
 
@@ -80,17 +82,23 @@ pub struct ChunkHeader {
 impl Display for ChunkHeader {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let fl = self.flags;
-        // looks like the first bits are _always_ `10`.
+        // It looks like the first bits are _always_ `10`.
         let f0 = (fl >> 4) & 0b11;
+        // Does f1 == 0 mean "active"? The number of such matches with the
+        // number of non-ff indices that appear from the beginning (non-dirty?),
+        // at least in the samples seen so far.
         let f1 = fl & 0b1111;
         let sz = self.size();
-        // does this mean "active"?
-        let fb = match f1 {
-            0b0000 => "  A ".to_string(),
-            _ => format!("{f1:04b}"),
+        // It looks like whenever f1 == 0, then f0 is either 0, 2 or 3, never 1.
+        // 0 occurs most frequently in the samples so far. 3 means a big chunk.
+        let tt = match (f0, f1) {
+            (0, 0) => "F", // most frequent
+            (2, 0) => "X",
+            (3, 0) => "B", // big chunk
+            _ => " ",
         };
-        let id = fl & 0b111111;
-        write!(f, "{id:02x} {f0:02b} {fb} {sz:4}")
+
+        write!(f, "{fl:02x} {tt} {sz:5} ({sz:04x})")
     }
 }
 
@@ -163,6 +171,11 @@ impl Display for LogEntry {
             _ => "..",
         };
 
+        let ii = match id {
+            ..0x40 => " ",
+            _ => "!",
+        };
+
         let ff = 0xffff;
         let xor = format!(
             "{:04x} {:02x} {:04x} {:04x} {:04x} {:04x}",
@@ -185,16 +198,22 @@ impl Display for LogEntry {
 
         write!(
             f,
-            "{t:04x} ({tt}) {id:02x}  {d:04x} {v:04x} {c:04x} {x:04x}  {m}  {xor}"
+            "{t:04x} ({tt}) {id:02x}  {d:04x} {v:04x} {c:04x} {x:04x}  {m} {ii}  {xor}"
         )
     }
 }
 
+const INDICES_SIZE: usize = 0x40;
+
 #[derive(FromBytes, FromZeroes, Clone, Copy, Debug)]
 #[repr(C, packed)]
-pub struct Indices([u8; 0x40]);
+pub struct Indices([u8; INDICES_SIZE]);
 
 const SMTH_SIZE: usize = size_of::<LogEntry>();
+
+// TODO: evaluate header length, separate from page 0
+const PAGE_HEADER_LENGTH: usize = 0x90;
+const CHUNK_OFFSET: usize = PAGE_HEADER_LENGTH + INDICES_SIZE;
 
 pub fn parse(data: &[u8], verbose: bool) -> Result<bool, String> {
     let size = data.len();
@@ -213,15 +232,17 @@ pub fn parse(data: &[u8], verbose: bool) -> Result<bool, String> {
             return Err(format!("Could not read header of page @ {offset:08x}"));
         };
 
-        let mut chunks = Vec::<Chunk>::new();
+        let mut live_chunks = Vec::<Chunk>::new();
+        let mut dead_chunks = Vec::<Chunk>::new();
 
-        let mut pos = 0xd0;
+        let mut pos = CHUNK_OFFSET;
 
         let n = header.num;
         if n > 0 && n != 0xff {
             if verbose {
                 println!("page {n:03}: read chunks...");
             }
+            let mut dead = false;
             loop {
                 if pos >= PAGE_SIZE {
                     if verbose {
@@ -238,15 +259,19 @@ pub fn parse(data: &[u8], verbose: bool) -> Result<bool, String> {
                     // break;
                     // NOTE: those may be "dead" chunks
                     pos += 16;
+                    dead = true;
                     continue;
                 }
                 let size = ch.size();
                 let c = Chunk {
                     header: ch,
-                    offset: pos,
+                    offset: pos - CHUNK_OFFSET,
                 };
-                chunks.push(c);
-
+                if dead {
+                    dead_chunks.push(c);
+                } else {
+                    live_chunks.push(c);
+                }
                 if verbose && ch.flags == 0xb0 {
                     let x8 = &data[o + 2..o + 10];
                     // NOTE: 3rd byte is always 0x00
@@ -268,7 +293,8 @@ pub fn parse(data: &[u8], verbose: bool) -> Result<bool, String> {
 
         let p = Page {
             header,
-            chunks,
+            live_chunks,
+            dead_chunks,
             offset,
         };
 
@@ -309,17 +335,17 @@ pub fn parse(data: &[u8], verbose: bool) -> Result<bool, String> {
         let nb = b._0;
         na.cmp(&nb)
     });
-    log.sort_by(|a, b| {
-        let na = a._9;
-        let nb = b._9;
-        na.cmp(&nb)
-    });
+    */
     log.sort_by(|a, b| {
         let na = a.id;
         let nb = b.id;
         na.cmp(&nb)
     });
-    */
+    log.sort_by(|a, b| {
+        let na = a._9;
+        let nb = b._9;
+        na.cmp(&nb)
+    });
 
     for (i, s) in log.iter().enumerate() {
         println!("{i:04}: {s}");
@@ -331,44 +357,59 @@ pub fn parse(data: &[u8], verbose: bool) -> Result<bool, String> {
     println!("{} entries, {} unique", log.len(), unique.len());
     println!();
 
-    let mut total_chunks = 0;
-    let mut active_chunks = 0;
+    let mut total_live_chunks = 0;
+    let mut total_dead_chunks = 0;
+    let mut total_active_chunks = 0;
     for p in &pages {
         let h = p.header;
-        let cs = p.chunks.len();
+        let lcs = p.live_chunks.len();
+        let dcs = p.dead_chunks.len();
         let po = p.offset;
-        println!("{h} @ {po:08x}, {cs} chunks");
-        total_chunks += cs;
+        println!("{h} @ {po:08x}");
+        total_live_chunks += lcs;
+        total_dead_chunks += dcs;
 
         if p.is_active() {
-            // TODO: evaluate header length, separate from page 0
-            const PAGE_HEADER_LENGTH: usize = 0x90;
             let d = Indices::read_from_prefix(&data[po + PAGE_HEADER_LENGTH..]).unwrap();
             for b in (0..0x40).step_by(0x10) {
                 println!("    {:02x?}", &d.0[b..b + 0x10]);
             }
             let fc: Vec<Chunk> = p
-                .chunks
+                .live_chunks
                 .clone()
                 .into_iter()
                 .filter(|c| c.is_active())
                 .collect();
             let acs = fc.len();
-            println!("{acs} active chunks");
-            active_chunks += acs;
+            total_active_chunks += acs;
 
-            for (i, c) in p.chunks.iter().enumerate() {
-                if i > 0 && i % 8 == 0 {
-                    println!(" |");
+            println!("{lcs} live chunks, {acs} active");
+            if lcs > 0 {
+                for (i, c) in p.live_chunks.iter().enumerate() {
+                    if i > 0 && i % 4 == 0 {
+                        println!(" |");
+                    }
+                    print!(" | {c}");
                 }
-                print!(" | {c}");
+                println!(" |");
             }
-            println!(" |");
+            println!("{dcs} dead chunks");
+            if dcs > 0 {
+                for (i, c) in p.dead_chunks.iter().enumerate() {
+                    if i > 0 && i % 4 == 0 {
+                        println!(" |");
+                    }
+                    print!(" | {c}");
+                }
+                println!(" |");
+            }
         }
         println!();
     }
     let ps = pages.len();
-    println!("{ps} pages, {total_chunks} chunks total, {active_chunks} active");
+    println!("{ps} pages");
+    println!("{total_live_chunks} live chunks total, {total_active_chunks} active");
+    println!("{total_dead_chunks} dead chunks total");
 
     Ok(true)
 }

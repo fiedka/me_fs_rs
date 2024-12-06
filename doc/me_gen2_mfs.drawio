@@ -1,13 +1,13 @@
 <mxfile host="Electron" agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) draw.io/24.7.17 Chrome/128.0.6613.36 Electron/32.0.1 Safari/537.36" version="24.7.17">
   <diagram name="Page-1" id="DBZPj44LbbOanJY9TFiw">
-    <mxGraphModel dx="1419" dy="879" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="600" pageHeight="400" math="0" shadow="0">
+    <mxGraphModel dx="1078" dy="679" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="600" pageHeight="400" math="0" shadow="0">
       <root>
         <mxCell id="0" />
         <mxCell id="1" parent="0" />
         <mxCell id="myED1TFq7FXXiKm_8lRY-15" value="Intel ME Gen 2 MFS" style="rounded=0;whiteSpace=wrap;html=1;verticalAlign=top;fontSize=20;" vertex="1" parent="1">
           <mxGeometry x="-20" y="-60" width="630" height="480" as="geometry" />
         </mxCell>
-        <mxCell id="myED1TFq7FXXiKm_8lRY-1" value="partition" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#1ba1e2;fontColor=#ffffff;strokeColor=#006EAF;strokeWidth=3;verticalAlign=bottom;labelPosition=center;verticalLabelPosition=top;align=center;" vertex="1" parent="1">
+        <mxCell id="myED1TFq7FXXiKm_8lRY-1" value="partition" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#1ba1e2;fontColor=#ffffff;strokeColor=#006EAF;strokeWidth=4;verticalAlign=bottom;labelPosition=center;verticalLabelPosition=top;align=center;" vertex="1" parent="1">
           <mxGeometry width="80" height="400" as="geometry" />
         </mxCell>
         <mxCell id="myED1TFq7FXXiKm_8lRY-2" value="page 2" style="rounded=0;whiteSpace=wrap;html=1;" vertex="1" parent="1">

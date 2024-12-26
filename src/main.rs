@@ -1,5 +1,9 @@
 use clap::Parser;
-use me_fs_rs::{cpd::CodePartitionDirectory, fpt::FPTEntry, parse, ME_FPT};
+use me_fs_rs::fit::Fit;
+use me_fs_rs::{
+    dir::gen2::Directory as Gen2Dir, dir::gen3::CodePartitionDirectory, fpt::FPTEntry, parse,
+    ME_FPT,
+};
 use std::fs;
 use std::io;
 
@@ -15,53 +19,82 @@ struct Args {
     #[arg(required = false, short, long)]
     verbose: bool,
 
+    /// Verbose output plus extra information for debugging
+    #[arg(required = false, short, long)]
+    debug: bool,
+
     /// File to read
     #[arg(index = 1)]
     file: String,
 }
 
-fn print_directories(cpds: &Vec<CodePartitionDirectory>) {
-    for cpd in cpds {
+fn print_gen2_dirs(dirs: &Vec<Gen2Dir>) {
+    for dir in dirs {
+        println!("{dir}");
+        for e in &dir.entries {
+            let pos = dir.offset + e.offset as usize;
+            /*
+            let sig =
+                u32::read_from_prefix(&data[pos..pos + 4]).unwrap();
+            let kind = match sig {
+                SIG_LUT => "LLUT",
+                SIG_LZMA => "LZMA",
+                _ => {
+                    dump48(&data[pos..]);
+                    "unknown"
+                }
+            };
+            */
+            let kind = "...";
+            let t = e.compression_type();
+            let b = e.bin_map();
+            println!(" - {e}    {pos:08x} {t:?} ({kind})\n     {b}");
+        }
         println!();
-        let CodePartitionDirectory { header, entries } = cpd;
-        let pname = std::str::from_utf8(&header.part_name).unwrap();
-        let checksum = header.version_or_checksum;
-        println!("{pname}  checksum or version: {checksum:08x}");
+    }
+}
+
+fn print_directories(dirs: &Vec<CodePartitionDirectory>) {
+    for d in dirs {
+        println!();
+        let checksum = d.header.version_or_checksum;
+        let o = d.offset;
+        println!("{} @ {o:08x}, checksum or version: {checksum:08x}", d.name);
+        match &d.manifest {
+            Ok(m) => println!("{m}"),
+            Err(e) => println!("{e}"),
+        }
+
         println!("  file name        offset    end       size           compression flags");
-        let mut entries = entries.clone();
-        entries.sort_by_key(|e| e.offset & 0xffffff);
+        let mut entries = d.entries.clone();
+        entries.sort_by_key(|e| e.offset);
         for e in entries {
-            // TODO: See https://github.com/skochinsky/me-tools class CPDEntry
-            // What is the other u8?!
-            let o = e.offset & 0xffffff;
-            let s = e.size;
-            let end = o + s;
-            let f = e.compression_flag;
-            if let Ok(n) = std::str::from_utf8(&e.name) {
-                let n = n.trim_end_matches(char::from(0));
-                println!("  {n:13} @ 0x{o:06x}:0x{end:06x} (0x{s:06x}) {f:032b}");
-            }
+            println!("  {e}");
         }
     }
 }
 
-fn print_fpt_entries(entries: &Vec<FPTEntry>) {
+fn print_fpt_entries(entries: &mut [FPTEntry]) {
     println!("  name     offset     end         size       type  notes");
-    let mut entries = entries.clone();
     entries.sort_by_key(|e| e.offset);
     for e in entries {
-        let o = e.offset as usize;
-        let s = e.size as usize;
-        let end = o + s;
+        println!("- {e}");
+    }
+}
 
-        let name = std::str::from_utf8(&e.name).unwrap();
-        let name = name.trim_end_matches(char::from(0));
-
-        let (part_type, full_name) = me_fs_rs::get_part_info(name);
-        let part_info = format!("{part_type:?}: {full_name}");
-        let name_offset_end_size = format!("{name:>4} @ 0x{o:08x}:0x{end:08x} (0x{s:08x})");
-
-        println!("- {name_offset_end_size}  {part_info}");
+fn print_fit(fit: &Result<Fit, String>) {
+    println!();
+    match fit {
+        Ok(fit) => {
+            println!("FIT @ {:08x}, {}", fit.offset, fit.header);
+            for e in &fit.entries {
+                println!("{e}");
+            }
+            println!();
+        }
+        Err(e) => {
+            println!("Could not parse FIT: {e}");
+        }
     }
 }
 
@@ -72,22 +105,34 @@ fn main() -> io::Result<()> {
 
     let data = fs::read(file).unwrap();
 
-    match parse(&data) {
+    match parse(&data, args.debug) {
         Ok(fpt) => {
             let ME_FPT {
                 base,
                 header,
                 entries,
                 directories,
+                gen2dirs,
+                fit,
             } = fpt;
-            if args.print || args.verbose {
-                println!("\nFound at 0x{base:08x}: {header:#0x?}");
-            }
             if args.verbose {
-                println!("\nPartitions:");
-                print_fpt_entries(&entries);
-                println!("\nDirectories:");
-                print_directories(&directories);
+                println!("\nFPT at 0x{base:08x}: {header:#0x?}");
+            } else if args.print {
+                println!("\nFPT at 0x{base:08x}: Version {}", header.header_ver);
+            }
+            if args.print || args.verbose || args.debug {
+                print_fpt_entries(&mut entries.clone());
+                print_fit(&fit);
+            }
+            if args.verbose || args.debug {
+                if !gen2dirs.is_empty() {
+                    println!("\nGen 2 Directories:");
+                    print_gen2_dirs(&gen2dirs);
+                }
+                if !directories.is_empty() {
+                    println!("\nGen 3 Directories:");
+                    print_directories(&directories);
+                }
             }
         }
         Err(e) => {

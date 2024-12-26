@@ -9,7 +9,7 @@ pub mod mfs;
 pub use fpt::ME_FPT;
 use fpt::{AFSP, DLMP, EFFS, FTPR, FTUP, MDMV, MFS, NFTP};
 
-const PARSE_MFS: bool = true;
+const PARSE_MFS: bool = false;
 
 fn dump48(data: &[u8]) {
     println!("Here are the first 48 bytes:");

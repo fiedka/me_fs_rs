@@ -1,4 +1,4 @@
-use core::fmt::{self, Display};
+use core::fmt::{self, Debug, Display};
 use core::mem::size_of;
 
 use serde::{Deserialize, Serialize};
@@ -9,18 +9,28 @@ use zerocopy_derive::{FromBytes, FromZeroes};
 const MAGIC: u32 = u32::from_le_bytes(*b"MFS\0");
 const PAGE_SIZE: usize = 0x4000;
 
-#[derive(FromBytes, FromZeroes, Serialize, Deserialize, Clone, Copy, Debug)]
+#[derive(FromBytes, FromZeroes, Serialize, Deserialize, Clone, Copy)]
 #[repr(C)]
 pub struct PageFlags(u8);
+
+impl Debug for PageFlags {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let fl = format!("{:04b}", self.0 & 0xf);
+        write!(f, "{fl}")
+    }
+}
 
 impl Display for PageFlags {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let fl = self.0 & 0xf;
         // TODO: Those are values seen so far; what do they mean?
+        // second bit is always 1 (?)
+        // last bit may indicate "dirty"
         let fls = match fl {
-            0x7 => "xxx7".to_string(),
-            0xc => "xxxC".to_string(),
-            0xe => "xxxE".to_string(),
+            0b0100 => "okay?".to_string(),
+            0b0111 => "dirty?".to_string(),
+            0b1100 => "live?".to_string(),
+            0b1110 => "active?".to_string(),
             _ => format!("{fl:04b}"),
         };
         write!(f, "{fls}")
@@ -48,7 +58,7 @@ impl Display for PageHeader {
         if num == 0xff && flags.0 == 0xff {
             return write!(f, "page unused");
         }
-        write!(f, "page {num:02}, flag {flags}")
+        write!(f, "page {num:02}, {flags} ({flags:?})")
     }
 }
 
@@ -121,7 +131,7 @@ impl ChunkHeader {
 }
 
 #[derive(FromBytes, FromZeroes, Serialize, Deserialize, Clone, Copy, Debug)]
-#[repr(C, packed)]
+#[repr(C)]
 pub struct Chunk {
     pub header: ChunkHeader,
     pub offset: usize,
@@ -131,7 +141,6 @@ impl Display for Chunk {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let h = self.header;
         let o = self.offset;
-        // TODO: offset
         write!(f, "{h} {o:04x}")
     }
 }
@@ -240,13 +249,13 @@ pub fn parse(data: &[u8], verbose: bool) -> Result<bool, String> {
         let n = header.num;
         if n > 0 && n != 0xff {
             if verbose {
-                println!("page {n:03}: read chunks...");
+                println!("page {n}: read chunks...");
             }
             let mut dead = false;
             loop {
                 if pos >= PAGE_SIZE {
                     if verbose {
-                        println!("page {n:03}: read all chunks, reached {pos:08x}");
+                        println!("  read all chunks, reached {pos:04x}");
                     }
                     break;
                 }
@@ -254,7 +263,7 @@ pub fn parse(data: &[u8], verbose: bool) -> Result<bool, String> {
                 let ch = ChunkHeader::read_from_prefix(&data[o..]).unwrap();
                 if ch.flags == 0xff || ch.size == 0 {
                     if verbose {
-                        println!("page {n:03}: no chunk @ {pos:08x}");
+                        println!("  no chunk @ {pos:04x}");
                     }
                     // break;
                     // NOTE: those may be "dead" chunks
@@ -262,11 +271,14 @@ pub fn parse(data: &[u8], verbose: bool) -> Result<bool, String> {
                     dead = true;
                     continue;
                 }
-                let size = ch.size();
+                let co = pos - CHUNK_OFFSET;
                 let c = Chunk {
                     header: ch,
-                    offset: pos - CHUNK_OFFSET,
+                    offset: co,
                 };
+                if verbose {
+                    println!("  chunk @ {pos:04x}: {c}");
+                }
                 if dead {
                     dead_chunks.push(c);
                 } else {
@@ -283,12 +295,12 @@ pub fn parse(data: &[u8], verbose: bool) -> Result<bool, String> {
                     // b0: [14, 05, 00, 00, ff, ff, ff, ff]
                     // b0: [14, 10, 00, 00, 0c, 00, 00, 04]
                     // b0: [14, 1d, 00, 00, e7, 03, 00, 00]
-                    println!("b0: {x8:02x?}");
+                    println!("  b0: {x8:02x?}");
                 }
-                pos += size;
+                pos += ch.size();
             }
         } else if verbose {
-            println!("page {n:03}: no chunks to read");
+            println!("  no chunks to read");
         }
 
         let p = Page {
@@ -335,7 +347,6 @@ pub fn parse(data: &[u8], verbose: bool) -> Result<bool, String> {
         let nb = b._0;
         na.cmp(&nb)
     });
-    */
     log.sort_by(|a, b| {
         let na = a.id;
         let nb = b.id;
@@ -346,6 +357,7 @@ pub fn parse(data: &[u8], verbose: bool) -> Result<bool, String> {
         let nb = b._9;
         na.cmp(&nb)
     });
+    */
 
     for (i, s) in log.iter().enumerate() {
         println!("{i:04}: {s}");
@@ -389,7 +401,14 @@ pub fn parse(data: &[u8], verbose: bool) -> Result<bool, String> {
                     if i > 0 && i % 4 == 0 {
                         println!(" |");
                     }
-                    print!(" | {c}");
+                    let b = if c.is_active() {
+                        // first actual data byte
+                        let b = data[po + CHUNK_OFFSET + c.offset + 2];
+                        format!("{b:02x}")
+                    } else {
+                        "  ".to_string()
+                    };
+                    print!(" | {c} {b}");
                 }
                 println!(" |");
             }

@@ -29,6 +29,7 @@ struct Args {
 }
 
 fn print_gen2_dirs(dirs: &Vec<Gen2Dir>) {
+    println!("Gen 2 Directories:");
     for dir in dirs {
         println!("{dir}");
         for e in &dir.entries {
@@ -54,7 +55,8 @@ fn print_gen2_dirs(dirs: &Vec<Gen2Dir>) {
     }
 }
 
-fn print_directories(dirs: &Vec<CodePartitionDirectory>) {
+fn print_gen3_dirs(dirs: &Vec<CodePartitionDirectory>) {
+    println!("Gen 3 Directories:");
     for d in dirs {
         println!();
         let checksum = d.header.version_or_checksum;
@@ -83,14 +85,12 @@ fn print_fpt_entries(entries: &mut [FPTEntry]) {
 }
 
 fn print_fit(fit: &Result<Fit, String>) {
-    println!();
     match fit {
         Ok(fit) => {
             println!("FIT @ {:08x}, {}", fit.offset, fit.header);
             for e in &fit.entries {
                 println!("{e}");
             }
-            println!();
         }
         Err(e) => {
             println!("Could not parse FIT: {e}");
@@ -105,6 +105,7 @@ fn main() -> io::Result<()> {
 
     let data = fs::read(file).unwrap();
 
+    println!();
     match parse(&data, args.debug) {
         Ok(fpt) => {
             let ME_FPT {
@@ -116,22 +117,22 @@ fn main() -> io::Result<()> {
                 fit,
             } = fpt;
             if args.verbose {
-                println!("\nFPT at 0x{base:08x}: {header:#0x?}");
+                println!("FPT at 0x{base:08x}: {header:#0x?}");
             } else if args.print {
-                println!("\nFPT at 0x{base:08x}: Version {}", header.header_ver);
+                println!("FPT at 0x{base:08x}: Version {}", header.header_ver);
             }
             if args.print || args.verbose || args.debug {
                 print_fpt_entries(&mut entries.clone());
+                println!();
                 print_fit(&fit);
             }
             if args.verbose || args.debug {
+                println!();
                 if !gen2dirs.is_empty() {
-                    println!("\nGen 2 Directories:");
                     print_gen2_dirs(&gen2dirs);
                 }
                 if !directories.is_empty() {
-                    println!("\nGen 3 Directories:");
-                    print_directories(&directories);
+                    print_gen3_dirs(&directories);
                 }
             }
         }

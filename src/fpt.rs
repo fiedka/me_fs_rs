@@ -62,6 +62,16 @@ pub struct FPT {
     pub fitc_ver: Version,
 }
 
+impl Display for FPT {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let hv = format!("  Header version: {}", self.header_ver);
+        let ev = format!("  Entry version:  {}", self.entry_ver);
+        let cs = format!("  Checksum:       {:02x}", self.checksum);
+        let v = format!("  FITC version:   {}", self.fitc_ver);
+        write!(f, "{hv}\n{ev}\n{cs}\n{v}")
+    }
+}
+
 #[allow(non_camel_case_types)]
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ME_FPT {

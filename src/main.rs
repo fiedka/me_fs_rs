@@ -116,12 +116,9 @@ fn main() -> io::Result<()> {
                 gen2dirs,
                 fit,
             } = fpt;
-            if args.verbose {
-                println!("FPT at 0x{base:08x}: {header:#0x?}");
-            } else if args.print {
-                println!("FPT at 0x{base:08x}: Version {}", header.header_ver);
-            }
             if args.print || args.verbose || args.debug {
+                println!("FPT at 0x{base:08x}: {header}");
+                println!("Entries:");
                 print_fpt_entries(&mut entries.clone());
                 println!();
                 print_fit(&fit);

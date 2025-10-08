@@ -3,14 +3,14 @@ use core::fmt::{self, Display};
 use serde::{Deserialize, Serialize};
 use std::str::from_utf8;
 use zerocopy::{FromBytes, Ref};
-use zerocopy_derive::{AsBytes, FromBytes, FromZeroes};
+use zerocopy_derive::{FromBytes, Immutable, IntoBytes};
 
 const ENTRY_MAGIC: &[u8] = b"$MME";
 const SIG_LUT: u32 = u32::from_le_bytes(*b"LLUT");
 const SIG_LZMA: u32 = u32::from_le_bytes([0x36, 0x00, 0x40, 0x00]);
 
 // https://github.com/skochinsky/me-tools me_unpack.py MeModuleHeader2
-#[derive(AsBytes, FromBytes, FromZeroes, Serialize, Deserialize, Clone, Copy, Debug)]
+#[derive(Immutable, IntoBytes, FromBytes, Serialize, Deserialize, Clone, Copy, Debug)]
 #[repr(C)]
 pub struct Entry {
     pub magic: [u8; 4],
@@ -102,7 +102,7 @@ impl Display for Entry {
     }
 }
 
-#[derive(AsBytes, FromBytes, FromZeroes, Serialize, Deserialize, Clone, Copy, Debug)]
+#[derive(IntoBytes, FromBytes, Serialize, Deserialize, Clone, Copy, Debug)]
 #[repr(C, packed)]
 pub struct Header {
     name: [u8; 4],
@@ -137,18 +137,18 @@ impl Directory {
         };
         let count = manifest.header.entries as usize;
         let d = &data[man::MANIFEST_SIZE..];
-        let Some(header) = Header::read_from_prefix(d) else {
+        let Ok((header, _)) = Header::read_from_prefix(d) else {
             return Err("cannot parse ME FW Gen 2 directory header".to_string());
         };
         let pos = man::MANIFEST_SIZE + HEADER_SIZE;
         let slice = &data[pos..];
-        let Some((r, _)) = Ref::<_, [Entry]>::new_slice_from_prefix(slice, count) else {
+        let Ok((r, _)) = Ref::<_, [Entry]>::from_prefix_with_elems(slice, count) else {
             return Err(format!(
                 "cannot parse ME FW Gen 2 directory entries @ {:08x}",
                 pos
             ));
         };
-        let entries = r.into_slice().to_vec();
+        let entries = r.to_vec();
         let name = match from_utf8(&header.name) {
             Ok(n) => n.trim_end_matches('\0').to_string(),
             Err(_) => format!("{:02x?}", header.name),

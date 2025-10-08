@@ -2,12 +2,12 @@ use crate::dir::man::Manifest;
 use core::fmt::{self, Display};
 use serde::{Deserialize, Serialize};
 use zerocopy::FromBytes;
-use zerocopy_derive::{AsBytes, FromBytes, FromZeroes};
+use zerocopy_derive::{FromBytes, IntoBytes};
 
 pub const CPD_MAGIC: &str = "$CPD";
 
 // see https://troopers.de/downloads/troopers17/TR17_ME11_Static.pdf
-#[derive(AsBytes, FromBytes, FromZeroes, Serialize, Deserialize, Clone, Copy, Debug)]
+#[derive(IntoBytes, FromBytes, Serialize, Deserialize, Clone, Copy, Debug)]
 #[repr(C, packed)]
 pub struct CPDHeader {
     pub magic: [u8; 4],
@@ -20,7 +20,7 @@ pub struct CPDHeader {
 
 const HEADER_SIZE: usize = core::mem::size_of::<CPDHeader>();
 
-#[derive(AsBytes, FromBytes, FromZeroes, Serialize, Deserialize, Clone, Copy, Debug)]
+#[derive(IntoBytes, FromBytes, Serialize, Deserialize, Clone, Copy, Debug)]
 #[repr(C)]
 pub struct CPDEntry {
     pub name: [u8; 12],
@@ -66,7 +66,7 @@ const OFFSET_MASK: u32 = 0xffffff;
 
 impl CodePartitionDirectory {
     pub fn new(data: Vec<u8>, offset: usize) -> Result<Self, String> {
-        let Some(header) = CPDHeader::read_from_prefix(&data) else {
+        let Ok((header, _)) = CPDHeader::read_from_prefix(&data) else {
             return Err("could not parse CPD header".to_string());
         };
         let n = header.part_name;
@@ -83,7 +83,7 @@ impl CodePartitionDirectory {
         };
         for e in 0..header.entries as usize {
             let pos = header_size + e * 24;
-            let mut entry = CPDEntry::read_from_prefix(&data[pos..]).unwrap();
+            let (mut entry, _) = CPDEntry::read_from_prefix(&data[pos..]).unwrap();
             entry.offset &= OFFSET_MASK;
             entries.push(entry);
         }

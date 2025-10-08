@@ -1,6 +1,6 @@
 use core::fmt::{self, Display};
 use serde::{Deserialize, Serialize};
-use zerocopy_derive::{AsBytes, FromBytes, FromZeroes};
+use zerocopy_derive::{FromBytes, IntoBytes};
 
 use crate::dir::gen2::Directory as Gen2Directory;
 use crate::dir::gen3::CodePartitionDirectory;
@@ -9,7 +9,7 @@ use crate::fit::Fit;
 // see https://github.com/peterbjornx/meimagetool ...intelme/model/fpt/ (Java)
 // and https://github.com/linuxboot/fiano/blob/main/pkg/intel/me/structures.go
 // and https://github.com/platomav/MEAnalyzer
-#[derive(AsBytes, FromBytes, FromZeroes, Serialize, Deserialize, Clone, Copy, Debug)]
+#[derive(IntoBytes, FromBytes, Serialize, Deserialize, Clone, Copy, Debug)]
 #[repr(C)]
 pub struct FPTEntry {
     pub name: [u8; 4],
@@ -41,7 +41,7 @@ impl Display for FPTEntry {
     }
 }
 
-#[derive(AsBytes, FromBytes, FromZeroes, Serialize, Deserialize, Clone, Copy, Debug)]
+#[derive(IntoBytes, FromBytes, Serialize, Deserialize, Clone, Copy, Debug)]
 #[repr(C)]
 pub struct FitcVer {
     pub major: u16,
@@ -53,7 +53,7 @@ pub struct FitcVer {
 // ...
 pub const FPT_MAGIC: &str = "$FPT";
 
-#[derive(AsBytes, FromBytes, FromZeroes, Serialize, Deserialize, Clone, Copy, Debug)]
+#[derive(IntoBytes, FromBytes, Serialize, Deserialize, Clone, Copy, Debug)]
 #[repr(C)]
 pub struct FPT {
     pub signature: [u8; 4],

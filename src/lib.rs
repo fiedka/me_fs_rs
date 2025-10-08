@@ -48,11 +48,11 @@ pub fn parse(data: &[u8], debug: bool) -> Result<ME_FPT, String> {
         let o = base + 16;
         let m = &data[o..o + 4];
         if m.eq(fpt::FPT_MAGIC.as_bytes()) {
-            let fpt = fpt::FPT::read_from_prefix(&data[o..]).unwrap();
+            let (fpt, _) = fpt::FPT::read_from_prefix(&data[o..]).unwrap();
             for e in 0..fpt.entries as usize {
                 // NOTE: Skip $FPT itself
                 let pos = o + 32 + e * 32;
-                let entry = fpt::FPTEntry::read_from_prefix(&data[pos..]).unwrap();
+                let (entry, _) = fpt::FPTEntry::read_from_prefix(&data[pos..]).unwrap();
                 entries.push(entry);
             }
 

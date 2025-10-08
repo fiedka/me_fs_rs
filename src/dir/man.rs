@@ -1,12 +1,12 @@
 use core::fmt::{self, Display};
 use serde::{Deserialize, Serialize};
 use zerocopy::FromBytes;
-use zerocopy_derive::{AsBytes, FromBytes, FromZeroes};
+use zerocopy_derive::{FromBytes, IntoBytes};
 
 const VENDOR_INTEL: u32 = 0x8086;
 const MANIFEST2_MAGIC: &[u8] = b"$MN2";
 
-#[derive(AsBytes, FromBytes, FromZeroes, Serialize, Deserialize, Clone, Copy, Debug)]
+#[derive(IntoBytes, FromBytes, Serialize, Deserialize, Clone, Copy, Debug)]
 #[repr(C)]
 pub struct Version {
     major: u16,
@@ -27,7 +27,7 @@ impl Display for Version {
     }
 }
 
-#[derive(AsBytes, FromBytes, FromZeroes, Serialize, Deserialize, Clone, Copy, Debug)]
+#[derive(IntoBytes, FromBytes, Serialize, Deserialize, Clone, Copy, Debug)]
 #[repr(C)]
 pub struct Date {
     day: u8,
@@ -42,7 +42,7 @@ impl Display for Date {
     }
 }
 
-#[derive(AsBytes, FromBytes, FromZeroes, Serialize, Deserialize, Clone, Copy, Debug)]
+#[derive(IntoBytes, FromBytes, Serialize, Deserialize, Clone, Copy, Debug)]
 #[repr(C)]
 pub struct Vendor(u32);
 
@@ -57,7 +57,7 @@ impl Display for Vendor {
     }
 }
 
-#[derive(AsBytes, FromBytes, FromZeroes, Serialize, Deserialize, Clone, Copy, Debug)]
+#[derive(IntoBytes, FromBytes, Serialize, Deserialize, Clone, Copy, Debug)]
 #[repr(C)]
 pub struct HeaderVersion {
     minor: u16,
@@ -72,7 +72,7 @@ impl Display for HeaderVersion {
 }
 
 // https://github.com/skochinsky/me-tools me_unpack.py MeManifestHeader
-#[derive(Serialize, Deserialize, AsBytes, FromBytes, FromZeroes, Clone, Copy, Debug)]
+#[derive(IntoBytes, FromBytes, Serialize, Deserialize, Clone, Copy, Debug)]
 #[repr(C)]
 pub struct Header {
     pub mod_type: u16,
@@ -114,7 +114,7 @@ impl Display for Header {
 const HEADER_SIZE: usize = core::mem::size_of::<Header>();
 const KEY_SIZE: usize = 0x100;
 
-#[derive(Serialize, Deserialize, AsBytes, FromBytes, FromZeroes, Clone, Copy, Debug)]
+#[derive(Serialize, Deserialize, IntoBytes, FromBytes, Clone, Copy, Debug)]
 #[repr(C)]
 pub struct Manifest {
     pub header: Header,
@@ -129,7 +129,7 @@ pub const MANIFEST_SIZE: usize = core::mem::size_of::<Manifest>();
 
 impl<'a> Manifest {
     pub fn new(data: &'a [u8]) -> Result<Self, String> {
-        let header = Header::read_from_prefix(data).unwrap();
+        let (header, _) = Header::read_from_prefix(data).unwrap();
 
         if header.magic != *MANIFEST2_MAGIC {
             let err = format!("manifest magic not found, got: {:02x?}", header.magic);
@@ -139,7 +139,7 @@ impl<'a> Manifest {
         let o = HEADER_SIZE;
         let rsa_pub_key: [u8; KEY_SIZE] = data[o..o + KEY_SIZE].try_into().unwrap();
         let o = o + KEY_SIZE;
-        let rsa_pub_exp = u32::read_from_prefix(&data[o..o + 4]).unwrap();
+        let (rsa_pub_exp, _) = u32::read_from_prefix(&data[o..o + 4]).unwrap();
         let o = o + 4;
         let rsa_sig: [u8; KEY_SIZE] = data[o..o + KEY_SIZE].try_into().unwrap();
 

@@ -12,11 +12,8 @@ name = "me_fs"
 path = "src/main.rs"
 
 [dependencies]
-clap = { version = "4.4.12", features = ["derive"] }
-crc = "3.2.1"
-serde = { version = "1.0.210", features = ["derive"] }
-serde-big-array = "0.5.1"
-serde_bytes = "0.11.15"
-zerocopy = "0.7.32"
-zerocopy-derive = "0.7.32"
-
+clap = { version = "4.5.48", features = ["derive"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_bytes = "0.11.19"
+zerocopy = "0.8.27"
+zerocopy-derive = "0.8.27"

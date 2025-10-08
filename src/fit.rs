@@ -1,12 +1,12 @@
 use core::fmt::{self, Display};
 use serde::{Deserialize, Serialize};
 use zerocopy::{FromBytes, Ref};
-use zerocopy_derive::{AsBytes, FromBytes, FromZeroes};
+use zerocopy_derive::{FromBytes, Immutable, IntoBytes};
 
 // firmware-interface-table-bios-specification-r1p2p1.pdf
 const FIT_MAGIC: &str = "_FIT_   ";
 
-#[derive(AsBytes, FromBytes, FromZeroes, Serialize, Deserialize, Clone, Copy, Debug)]
+#[derive(IntoBytes, FromBytes, Serialize, Deserialize, Clone, Copy, Debug)]
 #[repr(C, packed)]
 pub struct FitHeader {
     pub magic: [u8; 8],
@@ -24,7 +24,7 @@ impl Display for FitHeader {
     }
 }
 
-#[derive(AsBytes, FromZeroes, Serialize, Deserialize, Clone, Copy, Debug)]
+#[derive(IntoBytes, Serialize, Deserialize, Clone, Copy, Debug)]
 #[repr(u8)]
 pub enum EntryType {
     Header = 0x00,
@@ -44,7 +44,7 @@ pub enum EntryType {
     UnusedEntry = 0x7F,
 }
 
-#[derive(AsBytes, FromBytes, FromZeroes, Serialize, Deserialize, Clone, Copy, Debug)]
+#[derive(Immutable, IntoBytes, FromBytes, Serialize, Deserialize, Clone, Copy, Debug)]
 #[repr(C, packed)]
 pub struct FitEntry {
     pub addr: u64,
@@ -119,8 +119,8 @@ impl Fit {
         let fitp_pos = data.len() - 0x40;
         let fitp = &data[fitp_pos..fitp_pos + 4];
         let mapping = get_mapping(data.len());
-        let Some(fp) = u32::read_from_prefix(fitp) else {
-            return Err(format!("Cannot read FIT pointer @ {:08x}", fitp_pos));
+        let Ok((fp, _)) = u32::read_from_prefix(fitp) else {
+            return Err(format!("Cannot read FIT pointer @ {fitp_pos:08x}"));
         };
         if fp == 0xffff_ffff {
             let err = format!("Not a FIT: {fp:08x}");
@@ -133,17 +133,17 @@ impl Fit {
             return Err(err);
         }
 
-        let Some(header) = FitHeader::read_from_prefix(&data[offset..]) else {
-            return Err(format!("No FIT header @ {:08x}", offset));
+        let Ok((header, _)) = FitHeader::read_from_prefix(&data[offset..]) else {
+            return Err(format!("No FIT header @ {offset:08x}"));
         };
         // NOTE: The header counts as a first entry.
         let count = (header.entries - 1) as usize;
         let pos = offset + FIT_HEADER_SIZE;
         let slice = &data[pos..];
-        let Some((r, _)) = Ref::<_, [FitEntry]>::new_slice_from_prefix(slice, count) else {
+        let Ok((r, _)) = Ref::<_, [FitEntry]>::from_prefix_with_elems(slice, count) else {
             return Err(format!("cannot parse FIT entries @ {:08x}", pos));
         };
-        let entries = r.into_slice().to_vec();
+        let entries = r.to_vec();
         let fit = Fit {
             header,
             entries,

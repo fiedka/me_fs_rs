@@ -4,6 +4,7 @@ use zerocopy::FromBytes;
 pub mod dir;
 pub mod fit;
 pub mod fpt;
+pub mod ver;
 
 pub use fpt::ME_FPT;
 use fpt::{AFSP, DLMP, EFFS, FTPR, FTUP, MDMV, MFS, NFTP};

@@ -5,6 +5,7 @@ use zerocopy_derive::{FromBytes, IntoBytes};
 use crate::dir::gen2::Directory as Gen2Directory;
 use crate::dir::gen3::CodePartitionDirectory;
 use crate::fit::Fit;
+use crate::ver::Version;
 
 // see https://github.com/peterbjornx/meimagetool ...intelme/model/fpt/ (Java)
 // and https://github.com/linuxboot/fiano/blob/main/pkg/intel/me/structures.go
@@ -41,15 +42,6 @@ impl Display for FPTEntry {
     }
 }
 
-#[derive(IntoBytes, FromBytes, Serialize, Deserialize, Clone, Copy, Debug)]
-#[repr(C)]
-pub struct FitcVer {
-    pub major: u16,
-    pub minor: u16,
-    pub hotfix: u16,
-    pub build: u16,
-}
-
 // ...
 pub const FPT_MAGIC: &str = "$FPT";
 
@@ -67,7 +59,7 @@ pub struct FPT {
     pub uma_size_or_reserved: u32,
     pub flash_layout_or_flags: u32,
     // Not Present in ME version 7
-    pub fitc_ver: FitcVer,
+    pub fitc_ver: Version,
 }
 
 #[allow(non_camel_case_types)]

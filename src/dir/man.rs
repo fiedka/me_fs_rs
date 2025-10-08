@@ -3,29 +3,10 @@ use serde::{Deserialize, Serialize};
 use zerocopy::FromBytes;
 use zerocopy_derive::{FromBytes, IntoBytes};
 
+use crate::ver::Version;
+
 const VENDOR_INTEL: u32 = 0x8086;
 const MANIFEST2_MAGIC: &[u8] = b"$MN2";
-
-#[derive(IntoBytes, FromBytes, Serialize, Deserialize, Clone, Copy, Debug)]
-#[repr(C)]
-pub struct Version {
-    major: u16,
-    minor: u16,
-    patch: u16,
-    build: u16,
-}
-
-impl Display for Version {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let Version {
-            major,
-            minor,
-            patch,
-            build,
-        } = self;
-        write!(f, "{major}.{minor}.{patch}.{build}")
-    }
-}
 
 #[derive(IntoBytes, FromBytes, Serialize, Deserialize, Clone, Copy, Debug)]
 #[repr(C)]

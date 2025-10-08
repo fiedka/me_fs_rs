@@ -112,7 +112,7 @@ fn main() -> io::Result<()> {
                 base,
                 header,
                 entries,
-                directories,
+                gen3dirs,
                 gen2dirs,
                 fit,
             } = fpt;
@@ -131,8 +131,8 @@ fn main() -> io::Result<()> {
                 if !gen2dirs.is_empty() {
                     print_gen2_dirs(&gen2dirs);
                 }
-                if !directories.is_empty() {
-                    print_gen3_dirs(&directories);
+                if !gen3dirs.is_empty() {
+                    print_gen3_dirs(&gen3dirs);
                 }
             }
         }

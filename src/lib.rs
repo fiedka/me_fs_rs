@@ -24,7 +24,7 @@ pub fn parse(data: &[u8], debug: bool) -> Result<ME_FPT, String> {
     let cpd_bytes = dir::gen3::CPD_MAGIC.as_bytes();
     let mut entries = Vec::<fpt::FPTEntry>::new();
     let mut gen2dirs = Vec::<dir::gen2::Directory>::new();
-    let mut directories = Vec::<dir::gen3::CodePartitionDirectory>::new();
+    let mut gen3dirs = Vec::<dir::gen3::CodePartitionDirectory>::new();
 
     // Scan for all CPDs (there may be some not listed in FPT)
     if debug {
@@ -35,11 +35,11 @@ pub fn parse(data: &[u8], debug: bool) -> Result<ME_FPT, String> {
                 let Ok(cpd) = dir::gen3::CodePartitionDirectory::new(data[o..].to_vec(), o) else {
                     continue;
                 };
-                directories.push(cpd);
+                gen3dirs.push(cpd);
             }
             o += 16;
         }
-        println!("Found {} CPDs doing a full scan", directories.len());
+        println!("Found {} CPDs doing a full scan", gen3dirs.len());
     }
 
     let mut base = 0;
@@ -82,7 +82,7 @@ pub fn parse(data: &[u8], debug: bool) -> Result<ME_FPT, String> {
                                     data[o..o + s].to_vec(),
                                     o,
                                 ) {
-                                    directories.push(cpd);
+                                    gen3dirs.push(cpd);
                                 }
                             } else if let Ok(dir) = dir::gen2::Directory::new(&data[o..], o) {
                                 gen2dirs.push(dir);
@@ -125,7 +125,7 @@ pub fn parse(data: &[u8], debug: bool) -> Result<ME_FPT, String> {
                 base,
                 header: fpt,
                 entries,
-                directories,
+                gen3dirs,
                 gen2dirs,
                 fit,
             };

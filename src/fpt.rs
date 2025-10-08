@@ -8,7 +8,7 @@ use crate::fit::Fit;
 
 // see https://github.com/peterbjornx/meimagetool ...intelme/model/fpt/ (Java)
 // and https://github.com/linuxboot/fiano/blob/main/pkg/intel/me/structures.go
-// and https://github.com/platomav/MEAnalyzer (Python, good luck)
+// and https://github.com/platomav/MEAnalyzer
 #[derive(AsBytes, FromBytes, FromZeroes, Serialize, Deserialize, Clone, Copy, Debug)]
 #[repr(C)]
 pub struct FPTEntry {
@@ -76,7 +76,7 @@ pub struct ME_FPT {
     pub base: usize,
     pub header: FPT,
     pub entries: Vec<FPTEntry>,
-    pub directories: Vec<CodePartitionDirectory>,
+    pub gen3dirs: Vec<CodePartitionDirectory>,
     pub gen2dirs: Vec<Gen2Directory>,
     pub fit: Result<Fit, String>,
 }

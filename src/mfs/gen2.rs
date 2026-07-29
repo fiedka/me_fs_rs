@@ -92,19 +92,21 @@ pub struct ChunkHeader {
 impl Display for ChunkHeader {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let fl = self.flags;
-        // It looks like the first bits are _always_ `10`.
-        let f0 = (fl >> 4) & 0b11;
+        // It looks like the first bits are _always_ `10`. Other bits?
+        let f0 = (fl >> 5) & 1;
+        let f1 = (fl >> 4) & 1;
         // Does f1 == 0 mean "active"? The number of such matches with the
         // number of non-ff indices that appear from the beginning (non-dirty?),
         // at least in the samples seen so far.
-        let f1 = fl & 0b1111;
+        let f2 = fl & 0b1111;
         let sz = self.size();
         // It looks like whenever f1 == 0, then f0 is either 0, 2 or 3, never 1.
         // 0 occurs most frequently in the samples so far. 3 means a big chunk.
-        let tt = match (f0, f1) {
-            (0, 0) => "F", // most frequent
-            (2, 0) => "X",
-            (3, 0) => "B", // big chunk
+        let tt = match (f0, f1, f2) {
+            (0, 0, 0) => "F", // most frequent
+            (0, 1, 0) => "O", // rare, always 256 bytes so far
+            (1, 0, 0) => "X", // sometimes
+            (1, 1, 0) => "B", // big chunk
             _ => " ",
         };
 
@@ -117,7 +119,7 @@ impl ChunkHeader {
         // NOTE: This works _so far_.
         if self.size > 2 && self.flags != 0xb0 {
             let s = self.size as usize;
-            // selfunks are 16-byte aligned, filled with 0xff to the end
+            // chunks are 16-byte aligned, filled with 0xff to the end
             let sm = s % 16;
             if sm == 0 {
                 s
@@ -154,61 +156,53 @@ impl Chunk {
 #[derive(FromBytes, FromZeroes, Serialize, Deserialize, Clone, Copy, Debug)]
 #[repr(C, packed)]
 pub struct LogEntry {
-    pub _0: u16,
-    pub id: u8,
-    pub _3: u16,
-    pub _5: u16,
-    pub _7: u16,
-    pub _9: u16,
+    pub state: u8,
+    pub flags: u8,
+
+    pub id: [u8; 3],
+
+    pub owner: u8, // not sure
+    pub size: u16,
+
+    pub page: u8,
+    pub okey: u8,
+    pub fno: u8,
 }
 
 impl Display for LogEntry {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // apparently, some special values occur frequently
-        let t = self._0;
         let id = self.id;
-        let d = self._3;
-        let v = self._5;
-        let c = self._7;
-        let x = self._9;
+        let sz = self.size;
+        let st = self.state;
+        let fl = self.flags;
+        let ow = self.owner;
+        let no = self.fno;
+        let ok = self.okey;
+        let pg = self.page;
 
-        let m = match t {
-            0x70fc => "FC",
-            0x70dc => "DC",
-            0x70cc => "CC",
-            0x70c8 => "C8",
-            _ => "..",
-        };
+        let l = format!("{pg:02x}/{ok:02x}/{no:02x}");
 
-        let ii = match id {
-            ..0x40 => " ",
+        // apparently, some special values occur frequently
+        // let m = match st {
+        //     0x70fc => "FC",
+        //     0x70dc => "DC",
+        //     0x70cc => "CC",
+        //     0x70c8 => "C8",
+        //     _ => "..",
+        // };
+
+        // only high 4 bits are set
+        let fl = fl >> 4;
+        let fli = match fl {
+            ..4 => " ",
             _ => "!",
         };
 
-        let ff = 0xffff;
-        let xor = format!(
-            "{:04x} {:02x} {:04x} {:04x} {:04x} {:04x}",
-            t ^ ff,
-            id ^ 0xff,
-            d ^ ff,
-            v ^ ff,
-            c ^ ff,
-            x ^ ff
-        );
+        let stl = st & 0xf;
+        let sth = st >> 4;
+        let tt = format!("{st:02x} ({sth:04b} {stl:04b})");
 
-        let t0 = t >> 8;
-        let t1 = t & 0xff;
-        let t0a = t0 & 0xf;
-        let t0b = t0 >> 4;
-        let t1a = t1 & 0xf;
-        let t1b = t1 >> 4;
-
-        let tt = format!("{t0a:04b} {t0b:04b} {t1a:04b} {t1b:04b}");
-
-        write!(
-            f,
-            "{t:04x} ({tt}) {id:02x}  {d:04x} {v:04x} {c:04x} {x:04x}  {m} {ii}  {xor}"
-        )
+        write!(f, "{id:02x?} {sz:5} {ow:02x}  {l}  {tt}, {fl:04b}{fli}")
     }
 }
 
@@ -228,7 +222,7 @@ pub fn parse(data: &[u8], verbose: bool) -> Result<bool, String> {
     let size = data.len();
     println!("Trying to parse MFS for Gen 2, size: {size:08x}");
 
-    if size % PAGE_SIZE != 0 {
+    if !size.is_multiple_of(PAGE_SIZE) {
         return Err(format!("Size is not a multiple of page size ({PAGE_SIZE})"));
     }
 
@@ -263,7 +257,10 @@ pub fn parse(data: &[u8], verbose: bool) -> Result<bool, String> {
                 let ch = ChunkHeader::read_from_prefix(&data[o..]).unwrap();
                 if ch.flags == 0xff || ch.size == 0 {
                     if verbose {
-                        println!("  no chunk @ {pos:04x}");
+                        println!(
+                            "  no chunk @ {pos:04x}; size {:04}, flags {:02x}",
+                            ch.size, ch.flags
+                        );
                     }
                     // break;
                     // NOTE: those may be "dead" chunks
@@ -313,11 +310,17 @@ pub fn parse(data: &[u8], verbose: bool) -> Result<bool, String> {
         pages.push(p);
     }
 
-    pages.sort_by(|a, b| {
-        let na = a.header.num;
-        let nb = b.header.num;
-        na.cmp(&nb)
-    });
+    pages.sort_by_key(|p| p.header.num);
+
+    if false {
+        use std::io::Write;
+        let mut file = std::fs::File::create("sorted.bin").unwrap();
+        for p in &pages {
+            let o = p.offset;
+            let p = &data[o..o + PAGE_SIZE];
+            file.write_all(p).unwrap();
+        }
+    }
 
     // first page has MFS magic and some sort of metadata
     let mut i = 0;
@@ -329,7 +332,7 @@ pub fn parse(data: &[u8], verbose: bool) -> Result<bool, String> {
             loop {
                 let pos = p0.offset + PAGE_HEADER_SIZE + i * SMTH_SIZE;
                 let smth = LogEntry::read_from_prefix(&data[pos..]).unwrap();
-                if smth._0 == 0xffff {
+                if smth.flags == 0xff && smth.state == 0xff {
                     // no idea yet how to get the length here
                     break;
                 }

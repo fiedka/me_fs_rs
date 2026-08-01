@@ -83,7 +83,12 @@ class MEFileSystemFileMetadataStateMachine:
         return self.bytes_needed
 
     #returns the number of bytes consumed
-    def add_bytes(self, bytes, start_index, data_len=None, log = None):
+    def add_bytes(self,
+        bytes,
+        start_index,
+        data_len=None,
+        log = None
+    ):
         """
         supplies data to satisfy the state-machine's need for data as reported
         via get_bytes_needed().
@@ -92,28 +97,43 @@ class MEFileSystemFileMetadataStateMachine:
         start_index -- the start location of the bytes within the buffer
         data_len    -- number of bytes in the array, starting at start_index.
                        if None, then len(bytes) - start_index is assumed
+
+        sm = MEFileSystemFileMetadataStateMachine(file_no, file_len)
+        while not sm.is_complete():
+            bytes_read = sm.add_bytes(
+                bytes=me_file.read(sm.get_bytes_needed()), 
+                start_index=0,    
+                data_len=None, #shorthand for len(bytes)-start_index
+                log=log
+            )
         """
 
-        #shuffling data from potentially multiple calls to fill the data request from the 
-        #state machine (get_bytes_needed)
+        # shuffling data from potentially multiple calls to fill the data
+        # request from the state machine (get_bytes_needed)
         data_len = len(bytes) - start_index if data_len is None else data_len
 
-        if data_len == 0: return 0 # nothing to do
+        if data_len == 0:
+            # nothing to do
+            log.write("no\n")
+            return 0
 
-        #take the min of what's available and what we need
+        # take the min of what's available and what we need
         to_copy = data_len if data_len < self.bytes_needed else self.bytes_needed
+
         if self.work_buf:
-            self.work_buf[self.byte_offset:(self.byte_offset+to_copy)] = bytes[start_index:(start_index+to_copy)]
+            bo = self.byte_offset
+            self.work_buf[bo:(bo+to_copy)] = bytes[start_index:(start_index+to_copy)]
             self.byte_offset = self.byte_offset + to_copy
         self.bytes_needed = self.bytes_needed - to_copy
 
-        #if we don't have enough to process, return so they can feed more
+        # if we don't have enough to process, return so they can feed more
         if self.bytes_needed > 0:
+            log.write("ret\n")
             return to_copy
 
-        #we only make it this far once we've got the full bytes_needed data
-
+        # we only make it this far once we've got the full bytes_needed data
         meta_type = self.cur_meta[0] & 0xf0
+        log.write("metadata type: 0x%02x\n" % meta_type)
         if self.state == self.STATE_NEED_META:
             if self.byte_offset == 1:
                 if meta_type in [0xa0, 0xb0]:
@@ -121,7 +141,7 @@ class MEFileSystemFileMetadataStateMachine:
                 else:
                     self.bytes_needed = 1
             else:
-                #Have we found the file number we seek yet?
+                # Have we found the file number we seek yet?
                 if self.found_fileno or (self.file_no == self.cur_meta[0] & 0x0f):
                     self.found_fileno = True
                     self.state = self.STATE_NEED_FILE_DATA
@@ -132,44 +152,51 @@ class MEFileSystemFileMetadataStateMachine:
                     self.work_buf = None
                     self.byte_offset = None
 
-                #determine the data required based on metadata type, and whether we're
-                #skipping (so need to eat EOF padding on type 0x8# entries) or whether
-                #we're copying out file data.
+                # determine the data required based on metadata type, and
+                # whether we're skipping (so need to eat EOF padding on type
+                # 0x8# entries) or whether we're copying out file data.
                 if meta_type == 0x80:
                     if self.state == self.STATE_NEED_SKIP_DATA:
-                        #if we're skipping a 0x8# entry, we need to eat EOF padding too
+                        # if we're skipping a 0x8# entry, we need to eat EOF padding too
                         padding = (0x10 - (self.cur_meta[1] & 0xf)) & 0xf
-                        self.bytes_needed = padding + self.cur_meta[1] - 2 #remove header len, too
+                        # remove header len, too
+                        self.bytes_needed = padding + self.cur_meta[1] - 2
                     else:
-                        self.bytes_needed = self.cur_meta[1] - 2 #remove header len
+                        # remove header len
+                        self.bytes_needed = self.cur_meta[1] - 2
                 elif meta_type == 0xa0:
-                    self.bytes_needed = self.cur_meta[1] - 5 #remove header len
+                    # remove header len
+                    self.bytes_needed = self.cur_meta[1] - 5
                 elif meta_type == 0xb0:
-                    self.bytes_needed = self.cur_meta[1] * 0x100 - 5 #remove header len
+                    # remove header len
+                    self.bytes_needed = self.cur_meta[1] * 0x100 - 5
                 else:
                     if log:
-                        log.write("That's not a metadata type I've seen before...: 0x%02x\n" % self.cur_meta[0])
+                        log.write("metadata type unknown: 0x%02x\n" % self.cur_meta[0])
                     return None
 
-        elif self.state == self.STATE_NEED_SKIP_DATA: #recall: this is the state just *completed*
+        # recall: this is the state just *completed*
+        elif self.state == self.STATE_NEED_SKIP_DATA:
             self.state = self.STATE_NEED_META
             self.work_buf = self.cur_meta
             self.byte_offset = 0
             self.bytes_needed = 1
 
-        elif self.state == self.STATE_NEED_FILE_DATA: #recall: this is the state just *completed*
+        # recall: this is the state just *completed*
+        elif self.state == self.STATE_NEED_FILE_DATA:
             self.file_filled = self.byte_offset
             self.state = self.STATE_NEED_META
             self.work_buf = self.cur_meta
             self.byte_offset = 0
-            if meta_type == 0x80: #just completed a file-end record...we're done.
+            if meta_type == 0x80:
+                # just completed a file-end record...we're done.
                 self.bytes_needed = 0
                 self.state = self.STATE_COMPLETE
             elif meta_type in [0xa0, 0xb0]:
                 self.bytes_needed = 1
             else:
                 if log:
-                    log.write("That's not a metadata type I've seen before...: 0x%02x\n" % self.cur_meta[0])
+                    log.write("metadata type unknown: 0x%02x\n" % self.cur_meta[0])
                 return None
 
         elif self.state == self.STATE_COMPLETE: #can't leave this state
@@ -190,12 +217,14 @@ class MEFileSystemFileMetadataStateMachine:
 def read_me_fs_file(file_no, file_len, me_file, log = sys.stdout):
     sm = MEFileSystemFileMetadataStateMachine(file_no, file_len)
 
+    log.write("read file %d\n" % file_no)
     while not sm.is_complete():
         res = sm.add_bytes(
             bytes=me_file.read(sm.get_bytes_needed()), 
             start_index=0,    
             data_len=None, #shorthand for len(bytes)-start_index
-            log=log)
+            log=log
+        )
         if not res:
             log.write("Aborting file read.\n")
             break
@@ -504,33 +533,29 @@ def get_mfs_file(mefs, me_file, id, log = sys.stdout):
             print("State: %x, data: %s\n" % tuple(result_tuple))
     """
 
-    #Find the file identifer in the Allocation Table
+    # Find the file identifer in the Allocation Table
     best_ent = None
     for ent in mefs.allocation_table.entry_list:
         if ent and ent.identifier == id:
             best_ent = ent
 
             if ent.state == 0xdc:
-                break; # got a current entry
+                # got a current entry
+                break;
 
             log.write("Error: found an item w/ state %02x...continuing\n" % ent.state)
 
-    #if found, lookup which data page matches the entry's pgid value
+    # if found, lookup which data page matches the entry's pgid value
     if best_ent:
-        page_found = False
-
         for list_idx in range(len(mefs.data_page_list)):
             page = mefs.data_page_list[list_idx]
-
             if page.page_no == best_ent.pgid:
-                page_found = True
-
-                #we found the right data page, so start the file search
-
+                # we found the right data page, so start the file search
                 search_start = page.blk_itab[best_ent.okey] * 0x100
+                # d0 to skip over the datapage header if we're in the first block
+                search_start = 0xd0 if search_start == 0 else search_start
 
-                #In the following lines:
-                #  The value d0 is to skip over the datapage header if we're in the first block
+                # In the following lines:
                 #
                 #  The multiple of 0x4000 selects the data offset that goes with list_idx
                 #  since the parsed data-page list is in the same order as found in the file.
@@ -539,9 +564,11 @@ def get_mfs_file(mefs, me_file, id, log = sys.stdout):
                 #  to the index before multiplying.  The result is a set of offsets into the MFS data
                 #  bounding the file search
                 ##
-                search_off = 0x4000 * (list_idx+1) + (0xd0 if search_start == 0 else search_start)
+                offset = 0x4000 * (list_idx+1) + search_start
 
-                me_file.seek(search_off)
+                log.write("file offset %08x\n" % offset)
+
+                me_file.seek(offset)
                 data = read_me_fs_file(best_ent.fno, best_ent.filelen, me_file, log)
                 if data:
                     return [best_ent.state, data]
@@ -555,12 +582,14 @@ if __name__ == "__main__":
         MFS_LENGTH = 0xdc000 # real size
         mefs = parse_me_fs(MFS_LENGTH, spi_image_file)
 
-        #Dump the allocation table
+        # Dump the allocation table
         mefs.allocation_table.debug_print()
         print("")
 
-        first_file = mefs.allocation_table.entry_list[0].identifier
-        print("looking up the first file (%s):" % first_file)
+        fnum = 51
+        file = mefs.allocation_table.entry_list[fnum]
+        first_file = file.identifier
+        print("looking up file", fnum, first_file)
         result_tuple = get_mfs_file(mefs, spi_image_file, first_file)
         if result_tuple:
             print("State: %x, data: %s\n" % tuple(result_tuple))

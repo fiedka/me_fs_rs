@@ -46,7 +46,9 @@ pub struct PageHeader {
     pub _3: u8,         // ff
     pub all_0: u32,     // not always, can be 01. 2b, 29
     pub magic: [u8; 4], // first page only, ffff otherwise
-    pub smth: u32,      // first page only, ffff otherwise
+    // freed_flags: [u8; 0x80],
+    // block_itab: [u8; 0x40],
+    pub smth: u32, // first page only, ffff otherwise
     pub all_f: u32,
 }
 
@@ -68,10 +70,10 @@ const PAGE_HEADER_SIZE: usize = size_of::<PageHeader>();
 #[repr(C)]
 pub struct Page {
     pub header: PageHeader,
-    // #[serde(with = "serde_bytes")]
-    // pub indices: [u8; 0x40],
+    pub indices: Indices,
     pub live_chunks: Vec<Chunk>,
     pub dead_chunks: Vec<Chunk>,
+    /// offset in storage
     pub offset: usize,
 }
 
@@ -153,13 +155,24 @@ impl Chunk {
     }
 }
 
+#[derive(
+    FromBytes, FromZeroes, Serialize, Deserialize, Clone, Copy, Debug, Eq, PartialEq, Hash,
+)]
+pub struct FileId([u8; 3]);
+
+impl Display for FileId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:02x}{:02x}{:02x}", self.0[0], self.0[1], self.0[2])
+    }
+}
+
 #[derive(FromBytes, FromZeroes, Serialize, Deserialize, Clone, Copy, Debug)]
 #[repr(C, packed)]
 pub struct LogEntry {
     pub state: u8,
     pub flags: u8,
 
-    pub id: [u8; 3],
+    pub id: FileId,
 
     pub owner: u8, // not sure
     pub size: u16,
@@ -202,15 +215,15 @@ impl Display for LogEntry {
         let sth = st >> 4;
         let tt = format!("{st:02x} ({sth:04b} {stl:04b})");
 
-        write!(f, "{id:02x?} {sz:5} {ow:02x}  {l}  {tt}, {fl:04b}{fli}")
+        write!(f, "{id} {sz:5} {ow:02x}  {l}  {tt}, {fl:04b}{fli}")
     }
 }
 
 const INDICES_SIZE: usize = 0x40;
 
-#[derive(FromBytes, FromZeroes, Clone, Copy, Debug)]
+#[derive(FromBytes, FromZeroes, Clone, Copy, Debug, Serialize, Deserialize)]
 #[repr(C, packed)]
-pub struct Indices([u8; INDICES_SIZE]);
+pub struct Indices(#[serde(with = "serde_bytes")] [u8; INDICES_SIZE]);
 
 const SMTH_SIZE: usize = size_of::<LogEntry>();
 
@@ -229,6 +242,7 @@ pub fn parse(data: &[u8], verbose: bool) -> Result<bool, String> {
     let mut pages = Vec::<Page>::new();
     let mut log = Vec::<LogEntry>::new();
 
+    // TODO: separate first page already
     for offset in (0..size).step_by(PAGE_SIZE) {
         let slice = &data[offset..offset + PAGE_SIZE];
         let Some(header) = PageHeader::read_from_prefix(slice) else {
@@ -299,11 +313,13 @@ pub fn parse(data: &[u8], verbose: bool) -> Result<bool, String> {
         } else if verbose {
             println!("  no chunks to read");
         }
+        let indices = Indices::read_from_prefix(&slice[PAGE_HEADER_LENGTH..]).unwrap();
 
         let p = Page {
             header,
             live_chunks,
             dead_chunks,
+            indices,
             offset,
         };
 
@@ -385,9 +401,8 @@ pub fn parse(data: &[u8], verbose: bool) -> Result<bool, String> {
         total_dead_chunks += dcs;
 
         if p.is_active() {
-            let d = Indices::read_from_prefix(&data[po + PAGE_HEADER_LENGTH..]).unwrap();
             for b in (0..0x40).step_by(0x10) {
-                println!("    {:02x?}", &d.0[b..b + 0x10]);
+                println!("    {:02x?}", &p.indices.0[b..b + 0x10]);
             }
             let fc: Vec<Chunk> = p
                 .live_chunks
@@ -433,5 +448,85 @@ pub fn parse(data: &[u8], verbose: bool) -> Result<bool, String> {
     println!("{total_live_chunks} live chunks total, {total_active_chunks} active");
     println!("{total_dead_chunks} dead chunks total");
 
+    for f in 0..140 {
+        println!();
+        let file = log.get(f).unwrap();
+        println!("file {file}");
+        let flen = file.size as usize;
+        let k = file.okey as usize;
+
+        // TODO: handle error
+        let p = pages.iter().find(|p| p.header.num == file.page).unwrap();
+        let n = p.header.num;
+        let po = p.offset;
+        let i = p.indices.0[k];
+        let bo = i as usize * 0x100;
+        println!(" in page {n} @{po:08x}; {k} -> {i} / {bo:04x}");
+
+        // chunk offset
+        let mut co = if bo == 0 {
+            po + PAGE_HEADER_LENGTH
+        } else {
+            po + bo
+        };
+
+        let mut m = &data[co];
+        let mut s = ChunkMeta::from(*m);
+        // file number
+        let mut fno = m & 0xf;
+        let mut found = s != ChunkMeta::Skip && fno == file.fno;
+
+        // length for printing only
+        let plen = flen.min(16);
+        let f = if found { "+" } else { "." };
+        let b = &data[co..co + plen];
+        println!(" i: {m:02x} ({s:?}/{f}) {b:02x?}");
+
+        while (s == ChunkMeta::Skip || !found) && s != ChunkMeta::Unknown {
+            // how much to skip
+            let chunk_size = &data[co + 1];
+            let skip = chunk_size.next_multiple_of(16) as usize;
+            co += skip;
+
+            // next chunk
+            m = &data[co];
+            s = ChunkMeta::from(*m);
+            fno = m & 0xf;
+            found = s != ChunkMeta::Skip && fno == file.fno;
+        }
+
+        let f = if found { "+" } else { "." };
+        let b = &data[co..co + plen];
+        println!(" x: {m:02x} ({s:?}/{f}) {b:02x?}");
+
+        const EXTRACT: bool = true;
+        if EXTRACT && found && (s == ChunkMeta::Data || s == ChunkMeta::BigData) {
+            use std::fs::File;
+            use std::io::Write;
+            let d = &data[co..co + flen];
+            let mut f = File::create(format!("xdump/{}.bin", file.id)).unwrap();
+            f.write_all(d).unwrap();
+        }
+    }
+
     Ok(true)
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum ChunkMeta {
+    Skip,
+    Data,
+    BigData,
+    Unknown,
+}
+
+impl From<u8> for ChunkMeta {
+    fn from(value: u8) -> Self {
+        match value & 0xf0 {
+            0x80 => Self::Skip,
+            0xa0 => Self::Data,
+            0xb0 => Self::BigData,
+            _ => Self::Unknown,
+        }
+    }
 }

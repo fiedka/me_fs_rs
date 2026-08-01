@@ -80,9 +80,30 @@ Examples:
 - 34 bytes: name (fixed length padded with `0`s)
     - initial marker: `03`
     - last byte: real string length (here: 0x1e = 30, 0x16 = 22, 0x0f=15)
-- 20 bytes: SHA1 fingerprint
+- 21 bytes: marker `01` + SHA1 fingerprint
+    - e.g. `b3 1e b1 b7 40 e3 6c 84 02 da dc 37 d4 4d f5 d4 67 49 52 f9`
 - 28 bytes: `0`s (padding?)
 - 32 bytes: ?
+    - e.g . `77 5a 70 9f 36 f9 ba fa 7e 38 13 8f d7 46 eb 7c eb 5b 6b f3 21 63 45 b1 fc 4f 45 cb 26 1a d5 55`
+            `775a709f36f9bafa7e38138fd746eb7ceb5b6bf3216345b1fc4f45cb261ad555`
 - 1   byte: `0` (padding?)
 - 2  bytes: `fa5f` (seems to be fixed)
 - 17 bytes: `0`s (padding?)
+
+Check fingerprint: `openssl x509 -outform der -in cert.pem | sha1sum`
+
+### Entrust
+
+<https://www.entrust.com/sites/default/files/documentation/licensingandagreements/ev-cps-20170201-v2-0.pdf>
+
+- <https://ssl-tools.net/subjects/2c4aa669590b963b11d4f6901d6beecb7fa576d0>
+- <https://ssl-tools.net/certificates/b31eb1b740e36c8402dadc37d44df5d4674952f9.json>
+- <https://crt.sh/?sha1=b31eb1b740e36c8402dadc37d44df5d4674952f9>
+
+Fingerprint `b3 1e b1 b7 40 e3 6c 84 02 da dc 37 d4 4d f5 d4 67 49 52 f9`
+          ? `775a709f36f9bafa7e38138fd746eb7ceb5b6bf3216345b1fc4f45cb261ad555`
+
+<https://www.reddit.com/r/msp/comments/1j64j90/entrust_root_cas_have_now_been_distrusted/> oops
+- <https://security.googleblog.com/2024/06/sustaining-digital-certificate-security.html>
+- <https://bugzilla.mozilla.org/show_bug.cgi?id=1883843#c10>
+- <https://github.com/cabforum/servercert/blob/8e7fc7d5cac0cc27c44fe2aa88cf45f5606f4b94/docs/BR.md#49-certificate-revocation-and-suspension>

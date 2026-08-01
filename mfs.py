@@ -586,7 +586,7 @@ if __name__ == "__main__":
         mefs.allocation_table.debug_print()
         print("")
 
-        fnum = 51
+        fnum = 92
         file = mefs.allocation_table.entry_list[fnum]
         first_file = file.identifier
         print("looking up file", fnum, first_file)

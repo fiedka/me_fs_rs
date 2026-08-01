@@ -6,6 +6,8 @@ use std::collections::HashSet;
 use zerocopy::FromBytes;
 use zerocopy_derive::{FromBytes, FromZeroes};
 
+const EXTRACT: bool = false;
+
 const MAGIC: u32 = u32::from_le_bytes(*b"MFS\0");
 const PAGE_SIZE: usize = 0x4000;
 
@@ -178,8 +180,8 @@ pub struct LogEntry {
     pub size: u16,
 
     pub page: u8,
-    pub okey: u8,
-    pub fno: u8,
+    pub offset_key: u8,
+    pub file_num: u8,
 }
 
 impl Display for LogEntry {
@@ -189,8 +191,8 @@ impl Display for LogEntry {
         let st = self.state;
         let fl = self.flags;
         let ow = self.owner;
-        let no = self.fno;
-        let ok = self.okey;
+        let no = self.file_num;
+        let ok = self.offset_key;
         let pg = self.page;
 
         let l = format!("{pg:02x}/{ok:02x}/{no:02x}");
@@ -453,7 +455,7 @@ pub fn parse(data: &[u8], verbose: bool) -> Result<bool, String> {
         let file = log.get(f).unwrap();
         println!("file {file}");
         let flen = file.size as usize;
-        let k = file.okey as usize;
+        let k = file.offset_key as usize;
 
         // TODO: handle error
         let p = pages.iter().find(|p| p.header.num == file.page).unwrap();
@@ -470,11 +472,10 @@ pub fn parse(data: &[u8], verbose: bool) -> Result<bool, String> {
             po + bo
         };
 
-        let mut m = &data[co];
-        let mut s = ChunkMeta::from(*m);
+        let mut m = data[co];
+        let mut s = ChunkMeta::from(m);
         // file number
-        let mut fno = m & 0xf;
-        let mut found = s != ChunkMeta::Skip && fno == file.fno;
+        let mut found = m & 0xf == file.file_num && s != ChunkMeta::Unknown;
 
         // length for printing only
         let plen = flen.min(16);
@@ -482,30 +483,49 @@ pub fn parse(data: &[u8], verbose: bool) -> Result<bool, String> {
         let b = &data[co..co + plen];
         println!(" i: {m:02x} ({s:?}/{f}) {b:02x?}");
 
-        while (s == ChunkMeta::Skip || !found) && s != ChunkMeta::Unknown {
-            // how much to skip
-            let chunk_size = &data[co + 1];
-            let skip = chunk_size.next_multiple_of(16) as usize;
-            co += skip;
-
+        let mut chunk_size = data[co + 1] as usize;
+        while !found {
+            // skip padding/alignment
+            co += chunk_size.next_multiple_of(16);
+            if co > po + PAGE_SIZE {
+                println!("WARN: not found");
+                break;
+            }
             // next chunk
-            m = &data[co];
-            s = ChunkMeta::from(*m);
-            fno = m & 0xf;
-            found = s != ChunkMeta::Skip && fno == file.fno;
+            m = data[co];
+            s = ChunkMeta::from(m);
+            found = m & 0xf == file.file_num && s != ChunkMeta::Unknown;
+            chunk_size = data[co + 1] as usize;
         }
 
         let f = if found { "+" } else { "." };
         let b = &data[co..co + plen];
         println!(" x: {m:02x} ({s:?}/{f}) {b:02x?}");
 
-        const EXTRACT: bool = true;
-        if EXTRACT && found && (s == ChunkMeta::Data || s == ChunkMeta::BigData) {
+        if EXTRACT && found && s != ChunkMeta::Unknown {
             use std::fs::File;
             use std::io::Write;
-            let d = &data[co..co + flen];
-            let mut f = File::create(format!("xdump/{}.bin", file.id)).unwrap();
-            f.write_all(d).unwrap();
+            let header_size = match s {
+                ChunkMeta::Data | ChunkMeta::BigData => 5,
+                ChunkMeta::Rest => 2,
+                _ => 0,
+            };
+            // TODO: does this really make sense?!
+            // Could it be that we get a wrong chunk if chunk_size != flen?
+            if header_size < chunk_size {
+                let read_size = (chunk_size - header_size).min(flen);
+                let d = &data[co + header_size..co + header_size + read_size];
+                println!(
+                    "Read {} bytes from {chunk_size} bytes chunk @ {co:08x}",
+                    d.len()
+                );
+                let mut f = File::create(format!("xdump/{}.bin", file.id)).unwrap();
+                f.write_all(d).unwrap();
+            } else {
+                println!("Unexpected: {header_size} >= {chunk_size} ({flen})");
+            }
+        } else if EXTRACT {
+            println!("Skip");
         }
     }
 
@@ -514,7 +534,7 @@ pub fn parse(data: &[u8], verbose: bool) -> Result<bool, String> {
 
 #[derive(Debug, PartialEq, Eq)]
 enum ChunkMeta {
-    Skip,
+    Rest,
     Data,
     BigData,
     Unknown,
@@ -523,7 +543,7 @@ enum ChunkMeta {
 impl From<u8> for ChunkMeta {
     fn from(value: u8) -> Self {
         match value & 0xf0 {
-            0x80 => Self::Skip,
+            0x80 => Self::Rest,
             0xa0 => Self::Data,
             0xb0 => Self::BigData,
             _ => Self::Unknown,

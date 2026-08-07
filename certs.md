@@ -86,6 +86,7 @@ Examples:
 - 32 bytes: ?
     - e.g . `77 5a 70 9f 36 f9 ba fa 7e 38 13 8f d7 46 eb 7c eb 5b 6b f3 21 63 45 b1 fc 4f 45 cb 26 1a d5 55`
             `775a709f36f9bafa7e38138fd746eb7ceb5b6bf3216345b1fc4f45cb261ad555`
+            NOT the SHA256 btw
 - 1   byte: `0` (padding?)
 - 2  bytes: `fa5f` (seems to be fixed)
 - 17 bytes: `0`s (padding?)

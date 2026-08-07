@@ -24,6 +24,7 @@ name = "crc"
 path = "bin/crc.rs"
 
 [dependencies]
+bitfield-struct = "0.13.0"
 clap = { version = "4.4.12", features = ["derive"] }
 crc = "3.2.1"
 serde = { version = "1.0.210", features = ["derive"] }

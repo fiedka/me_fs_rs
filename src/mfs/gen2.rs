@@ -1,6 +1,7 @@
 use core::fmt::{self, Debug, Display};
 use core::mem::size_of;
 
+use bitfield_struct::bitfield;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use zerocopy::FromBytes;
@@ -86,16 +87,62 @@ impl Page {
     }
 }
 
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+enum ChunkType {
+    Rest,
+    Data,
+    BigData,
+    Unknown,
+}
+
+impl From<u8> for ChunkType {
+    fn from(value: u8) -> Self {
+        match value {
+            0x8 => Self::Rest,
+            0xa => Self::Data,
+            0xb => Self::BigData,
+            _ => Self::Unknown,
+        }
+    }
+}
+
+impl ChunkType {
+    const fn from_bits(val: u8) -> Self {
+        match val & 0xf {
+            0x8 => Self::Rest,
+            0xa => Self::Data,
+            0xb => Self::BigData,
+            _ => Self::Unknown,
+        }
+    }
+
+    const fn into_bits(self) -> u8 {
+        self as u8
+    }
+}
+
+// use zerocopy::{AlignmentError, ConvertError, IntoBytes, SizeError};
+// use zerocopy_derive::{Immutable, IntoBytes};
+
+#[bitfield(u8)]
+#[derive(FromBytes, FromZeroes, Serialize, Deserialize)]
+pub struct ChunkMeta {
+    #[bits(4)]
+    file_num: u8,
+    #[bits(4)]
+    chunk_type: ChunkType,
+}
+
 #[derive(FromBytes, FromZeroes, Serialize, Deserialize, Clone, Copy, Debug)]
 #[repr(C, packed)]
 pub struct ChunkHeader {
-    pub flags: u8,
+    pub meta: ChunkMeta,
     pub size: u8,
 }
 
 impl Display for ChunkHeader {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let fl = self.flags;
+        let fl: u8 = self.meta.into();
         // It looks like the first bits are _always_ `10`. Other bits?
         let f0 = (fl >> 5) & 1;
         let f1 = (fl >> 4) & 1;
@@ -121,7 +168,7 @@ impl Display for ChunkHeader {
 impl ChunkHeader {
     pub fn size(&self) -> usize {
         // NOTE: This works _so far_.
-        if self.size > 2 && self.flags != 0xb0 {
+        if self.size > 2 && self.meta.chunk_type() != ChunkType::BigData {
             let s = self.size as usize;
             // chunks are 16-byte aligned, filled with 0xff to the end
             let sm = s % 16;
@@ -153,7 +200,7 @@ impl Display for Chunk {
 
 impl Chunk {
     pub fn is_active(&self) -> bool {
-        self.header.flags & 0b1111 == 0
+        self.header.meta.file_num() == 0
     }
 }
 
@@ -271,12 +318,10 @@ pub fn parse(data: &[u8], verbose: bool) -> Result<bool, String> {
                 }
                 let o = offset + pos;
                 let ch = ChunkHeader::read_from_prefix(&data[o..]).unwrap();
-                if ch.flags == 0xff || ch.size == 0 {
+                let m: u8 = ch.meta.into();
+                if m == 0xff || ch.size == 0 {
                     if verbose {
-                        println!(
-                            "  no chunk @ {pos:04x}; size {:04}, flags {:02x}",
-                            ch.size, ch.flags
-                        );
+                        println!("  no chunk @ {pos:04x}; size {:04}, meta {m:02x?}", ch.size,);
                     }
                     // break;
                     // NOTE: those may be "dead" chunks
@@ -297,7 +342,7 @@ pub fn parse(data: &[u8], verbose: bool) -> Result<bool, String> {
                 } else {
                     live_chunks.push(c);
                 }
-                if verbose && ch.flags == 0xb0 {
+                if verbose && ch.meta.chunk_type() == ChunkType::BigData {
                     let x8 = &data[o + 2..o + 10];
                     // NOTE: 3rd byte is always 0x00
                     // Examples:
@@ -472,16 +517,15 @@ pub fn parse(data: &[u8], verbose: bool) -> Result<bool, String> {
             po + bo
         };
 
-        let mut m = data[co];
-        let mut s = ChunkMeta::from(m);
+        let mut m = ChunkMeta::from(data[co]);
         // file number
-        let mut found = m & 0xf == file.file_num && s != ChunkMeta::Unknown;
+        let mut found = m.file_num() == file.file_num && m.chunk_type() != ChunkType::Unknown;
 
         // length for printing only
         let plen = flen.min(16);
         let f = if found { "+" } else { "." };
         let b = &data[co..co + plen];
-        println!(" i: {m:02x} ({s:?}/{f}) {b:02x?}");
+        println!(" i: {m:?}/{f} {b:02x?}");
 
         let mut chunk_size = data[co + 1] as usize;
         while !found {
@@ -492,35 +536,47 @@ pub fn parse(data: &[u8], verbose: bool) -> Result<bool, String> {
                 break;
             }
             // next chunk
-            m = data[co];
-            s = ChunkMeta::from(m);
-            found = m & 0xf == file.file_num && s != ChunkMeta::Unknown;
+            m = ChunkMeta::from(data[co]);
+            found = m.file_num() == file.file_num && m.chunk_type() != ChunkType::Unknown;
             chunk_size = data[co + 1] as usize;
         }
 
         let f = if found { "+" } else { "." };
         let b = &data[co..co + plen];
-        println!(" x: {m:02x} ({s:?}/{f}) {b:02x?}");
+        println!(" x: {m:?}/{f} {b:02x?}");
 
-        if EXTRACT && found && s != ChunkMeta::Unknown {
+        if EXTRACT && found {
             use std::fs::File;
             use std::io::Write;
-            let header_size = match s {
-                ChunkMeta::Data | ChunkMeta::BigData => 5,
-                ChunkMeta::Rest => 2,
+            let header_size = match m.chunk_type() {
+                ChunkType::Data | ChunkType::BigData => 5,
+                ChunkType::Rest => 2,
                 _ => 0,
             };
             // TODO: does this really make sense?!
             // Could it be that we get a wrong chunk if chunk_size != flen?
             if header_size < chunk_size {
                 let read_size = (chunk_size - header_size).min(flen);
-                let d = &data[co + header_size..co + header_size + read_size];
+                let mut d = data[co + header_size..co + header_size + read_size].to_vec();
                 println!(
                     "Read {} bytes from {chunk_size} bytes chunk @ {co:08x}",
                     d.len()
                 );
+                if read_size < flen {
+                    let no = co + chunk_size.next_multiple_of(16);
+                    m = ChunkMeta::from(data[no]);
+                    let header_size = match m.chunk_type() {
+                        ChunkType::Data | ChunkType::BigData => 5,
+                        ChunkType::Rest => 2,
+                        _ => 0,
+                    };
+                    chunk_size = data[no + 1] as usize;
+                    let read_size = (chunk_size - header_size).min(flen);
+                    let n = &data[no + header_size..no + header_size + read_size].to_vec();
+                    d.extend_from_slice(n);
+                }
                 let mut f = File::create(format!("xdump/{}.bin", file.id)).unwrap();
-                f.write_all(d).unwrap();
+                f.write_all(&d).unwrap();
             } else {
                 println!("Unexpected: {header_size} >= {chunk_size} ({flen})");
             }
@@ -530,23 +586,4 @@ pub fn parse(data: &[u8], verbose: bool) -> Result<bool, String> {
     }
 
     Ok(true)
-}
-
-#[derive(Debug, PartialEq, Eq)]
-enum ChunkMeta {
-    Rest,
-    Data,
-    BigData,
-    Unknown,
-}
-
-impl From<u8> for ChunkMeta {
-    fn from(value: u8) -> Self {
-        match value & 0xf0 {
-            0x80 => Self::Rest,
-            0xa0 => Self::Data,
-            0xb0 => Self::BigData,
-            _ => Self::Unknown,
-        }
-    }
 }

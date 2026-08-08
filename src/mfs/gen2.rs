@@ -4,10 +4,11 @@ use core::mem::size_of;
 use bitfield_struct::bitfield;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+use strum::Display;
 use zerocopy::FromBytes;
 use zerocopy_derive::{FromBytes, FromZeroes};
 
-const EXTRACT: bool = false;
+const EXTRACT: bool = true;
 
 const MAGIC: u32 = u32::from_le_bytes(*b"MFS\0");
 const PAGE_SIZE: usize = 0x4000;
@@ -87,31 +88,32 @@ impl Page {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Display)]
 enum ChunkType {
     Rest,
     Data,
-    BigData,
+    Big,
     Unknown,
 }
 
 impl From<u8> for ChunkType {
     fn from(value: u8) -> Self {
         match value {
-            0x8 => Self::Rest,
-            0xa => Self::Data,
-            0xb => Self::BigData,
+            0b1000 => Self::Rest,
+            0b1010 => Self::Data,
+            0b1011 => Self::Big,
             _ => Self::Unknown,
         }
     }
 }
 
 impl ChunkType {
+    // It looks like the first bits are _always_ `10`. Other bits?
     const fn from_bits(val: u8) -> Self {
         match val & 0xf {
-            0x8 => Self::Rest,
-            0xa => Self::Data,
-            0xb => Self::BigData,
+            0b1000 => Self::Rest,
+            0b1010 => Self::Data,
+            0b1011 => Self::Big,
             _ => Self::Unknown,
         }
     }
@@ -121,9 +123,6 @@ impl ChunkType {
     }
 }
 
-// use zerocopy::{AlignmentError, ConvertError, IntoBytes, SizeError};
-// use zerocopy_derive::{Immutable, IntoBytes};
-
 #[bitfield(u8)]
 #[derive(FromBytes, FromZeroes, Serialize, Deserialize)]
 pub struct ChunkMeta {
@@ -131,6 +130,16 @@ pub struct ChunkMeta {
     file_num: u8,
     #[bits(4)]
     chunk_type: ChunkType,
+}
+
+impl ChunkMeta {
+    pub fn header_size(&self) -> usize {
+        match self.chunk_type() {
+            ChunkType::Data | ChunkType::Big => 5,
+            ChunkType::Rest => 2,
+            _ => 0,
+        }
+    }
 }
 
 #[derive(FromBytes, FromZeroes, Serialize, Deserialize, Clone, Copy, Debug)]
@@ -142,43 +151,32 @@ pub struct ChunkHeader {
 
 impl Display for ChunkHeader {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let fl: u8 = self.meta.into();
-        // It looks like the first bits are _always_ `10`. Other bits?
-        let f0 = (fl >> 5) & 1;
-        let f1 = (fl >> 4) & 1;
-        // Does f1 == 0 mean "active"? The number of such matches with the
-        // number of non-ff indices that appear from the beginning (non-dirty?),
-        // at least in the samples seen so far.
-        let f2 = fl & 0b1111;
+        let fnum = self.meta.file_num();
         let sz = self.size();
-        // It looks like whenever f1 == 0, then f0 is either 0, 2 or 3, never 1.
-        // 0 occurs most frequently in the samples so far. 3 means a big chunk.
-        let tt = match (f0, f1, f2) {
-            (0, 0, 0) => "F", // most frequent
-            (0, 1, 0) => "O", // rare, always 256 bytes so far
-            (1, 0, 0) => "X", // sometimes
-            (1, 1, 0) => "B", // big chunk
-            _ => " ",
-        };
+        let ct = self.meta.chunk_type();
 
-        write!(f, "{fl:02x} {tt} {sz:5} ({sz:04x})")
+        write!(f, "{fnum:2} {ct:4} {sz:5}")
     }
 }
 
+const ALIGNMENT: usize = 16;
+
 impl ChunkHeader {
     pub fn size(&self) -> usize {
-        // NOTE: This works _so far_.
-        if self.size > 2 && self.meta.chunk_type() != ChunkType::BigData {
-            let s = self.size as usize;
-            // chunks are 16-byte aligned, filled with 0xff to the end
-            let sm = s % 16;
-            if sm == 0 {
-                s
-            } else {
-                s + 16 - sm
-            }
-        } else {
+        if self.meta.chunk_type() == ChunkType::Big {
             self.size as usize * 0x100
+        } else {
+            self.size as usize
+        }
+    }
+
+    pub fn aligned(&self) -> usize {
+        // chunks are 16-byte aligned, filled with 0xff to the end
+        let s = self.size();
+        if s.is_multiple_of(ALIGNMENT) {
+            s
+        } else {
+            s.next_multiple_of(16)
         }
     }
 }
@@ -217,7 +215,7 @@ impl Display for FileId {
 
 #[derive(FromBytes, FromZeroes, Serialize, Deserialize, Clone, Copy, Debug)]
 #[repr(C, packed)]
-pub struct LogEntry {
+pub struct FileEntry {
     pub state: u8,
     pub flags: u8,
 
@@ -231,7 +229,7 @@ pub struct LogEntry {
     pub file_num: u8,
 }
 
-impl Display for LogEntry {
+impl Display for FileEntry {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let id = self.id;
         let sz = self.size;
@@ -274,11 +272,97 @@ const INDICES_SIZE: usize = 0x40;
 #[repr(C, packed)]
 pub struct Indices(#[serde(with = "serde_bytes")] [u8; INDICES_SIZE]);
 
-const SMTH_SIZE: usize = size_of::<LogEntry>();
+const SMTH_SIZE: usize = size_of::<FileEntry>();
 
 // TODO: evaluate header length, separate from page 0
 const PAGE_HEADER_LENGTH: usize = 0x90;
 const CHUNK_OFFSET: usize = PAGE_HEADER_LENGTH + INDICES_SIZE;
+
+const BLOCK_SIZE: usize = 0x100;
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Display)]
+pub enum FileReadError {
+    NotInPage,
+    NotFound,
+    UnexpectedChunkSize,
+}
+
+pub fn read_file(data: &[u8], page: &Page, file: &FileEntry) -> Result<Vec<u8>, FileReadError> {
+    let n = page.header.num;
+    let po = page.offset;
+    // file offset key -> index translation
+    let k = file.offset_key as usize;
+    let i = page.indices.0[k];
+    // base offset
+    let bo = i as usize * BLOCK_SIZE;
+    // chunk offset
+    let mut co = if bo == 0 { PAGE_HEADER_LENGTH } else { bo };
+
+    println!("file {file}");
+    println!(" in page {n} @{po:08x}; {k} -> {i} / {bo:04x}");
+
+    let flen = file.size as usize;
+
+    let mut h = ChunkHeader::read_from_prefix(&data[co..]).unwrap();
+    let mut found = h.meta.file_num() == file.file_num && h.meta.chunk_type() != ChunkType::Unknown;
+
+    while !found {
+        // see next chunk
+        co += h.aligned();
+        if co >= PAGE_SIZE {
+            return Err(FileReadError::NotInPage);
+        }
+        h = ChunkHeader::read_from_prefix(&data[co..]).unwrap();
+        found = h.meta.file_num() == file.file_num && h.meta.chunk_type() != ChunkType::Unknown;
+    }
+
+    let header_size = h.meta.header_size();
+    let mut chunk_size = h.size();
+    let mut d = vec![];
+    // safety check
+    if header_size < chunk_size {
+        let mut read_size = (chunk_size - header_size).min(flen);
+        let o = co + header_size;
+        let n = &data[o..o + read_size];
+        d.extend_from_slice(n);
+        println!(
+            "Read {read_size} bytes from {chunk_size} bytes chunk @ {:08x}",
+            po + co
+        );
+        while read_size < flen && d.len() < flen {
+            found = h.meta.file_num() == file.file_num && h.meta.chunk_type() != ChunkType::Unknown;
+            while !found {
+                // see next chunk
+                co += h.aligned();
+                if co >= PAGE_SIZE {
+                    return Err(FileReadError::NotInPage);
+                }
+                h = ChunkHeader::read_from_prefix(&data[co..]).unwrap();
+                found =
+                    h.meta.file_num() == file.file_num && h.meta.chunk_type() != ChunkType::Unknown;
+            }
+
+            // next offset
+            co += h.aligned();
+            println!(
+                "Read {read_size} bytes from {chunk_size} bytes chunk @ {:08x}",
+                po + co
+            );
+            h = ChunkHeader::read_from_prefix(&data[co..]).unwrap();
+            let header_size = h.meta.header_size();
+            chunk_size = h.size();
+            read_size = (chunk_size - header_size).min(flen);
+            let o = co + header_size;
+            let n = &data[o..o + read_size];
+            d.extend_from_slice(n);
+        }
+
+        Ok(d.to_vec())
+    } else {
+        println!("Unexpected: {header_size} >= {chunk_size} ({flen})");
+        Err(FileReadError::UnexpectedChunkSize)
+    }
+}
 
 pub fn parse(data: &[u8], verbose: bool) -> Result<bool, String> {
     let size = data.len();
@@ -289,7 +373,7 @@ pub fn parse(data: &[u8], verbose: bool) -> Result<bool, String> {
     }
 
     let mut pages = Vec::<Page>::new();
-    let mut log = Vec::<LogEntry>::new();
+    let mut log = Vec::<FileEntry>::new();
 
     // TODO: separate first page already
     for offset in (0..size).step_by(PAGE_SIZE) {
@@ -342,7 +426,7 @@ pub fn parse(data: &[u8], verbose: bool) -> Result<bool, String> {
                 } else {
                     live_chunks.push(c);
                 }
-                if verbose && ch.meta.chunk_type() == ChunkType::BigData {
+                if verbose && ch.meta.chunk_type() == ChunkType::Big {
                     let x8 = &data[o + 2..o + 10];
                     // NOTE: 3rd byte is always 0x00
                     // Examples:
@@ -355,7 +439,7 @@ pub fn parse(data: &[u8], verbose: bool) -> Result<bool, String> {
                     // b0: [14, 1d, 00, 00, e7, 03, 00, 00]
                     println!("  b0: {x8:02x?}");
                 }
-                pos += ch.size();
+                pos += ch.aligned();
             }
         } else if verbose {
             println!("  no chunks to read");
@@ -394,7 +478,7 @@ pub fn parse(data: &[u8], verbose: bool) -> Result<bool, String> {
         } else {
             loop {
                 let pos = p0.offset + PAGE_HEADER_SIZE + i * SMTH_SIZE;
-                let smth = LogEntry::read_from_prefix(&data[pos..]).unwrap();
+                let smth = FileEntry::read_from_prefix(&data[pos..]).unwrap();
                 if smth.flags == 0xff && smth.state == 0xff {
                     // no idea yet how to get the length here
                     break;
@@ -406,7 +490,7 @@ pub fn parse(data: &[u8], verbose: bool) -> Result<bool, String> {
     }
 
     println!();
-    println!("== Log or smth (page 0)");
+    println!("== List of files (page 0)");
     /*
     log.sort_by(|a, b| {
         let na = a._0;
@@ -498,90 +582,27 @@ pub fn parse(data: &[u8], verbose: bool) -> Result<bool, String> {
     for f in 0..140 {
         println!();
         let file = log.get(f).unwrap();
-        println!("file {file}");
-        let flen = file.size as usize;
-        let k = file.offset_key as usize;
 
         // TODO: handle error
         let p = pages.iter().find(|p| p.header.num == file.page).unwrap();
-        let n = p.header.num;
         let po = p.offset;
-        let i = p.indices.0[k];
-        let bo = i as usize * 0x100;
-        println!(" in page {n} @{po:08x}; {k} -> {i} / {bo:04x}");
+        let sz = file.size;
+        let id = file.id;
+        let no = file.file_num;
 
-        // chunk offset
-        let mut co = if bo == 0 {
-            po + PAGE_HEADER_LENGTH
-        } else {
-            po + bo
-        };
+        let page = &data[po..po + PAGE_SIZE];
+        match read_file(page, p, file) {
+            Ok(res) => {
+                println!("Read {}/{}", res.len(), sz);
+                if EXTRACT {
+                    use std::fs::File;
+                    use std::io::Write;
 
-        let mut m = ChunkMeta::from(data[co]);
-        // file number
-        let mut found = m.file_num() == file.file_num && m.chunk_type() != ChunkType::Unknown;
-
-        // length for printing only
-        let plen = flen.min(16);
-        let f = if found { "+" } else { "." };
-        let b = &data[co..co + plen];
-        println!(" i: {m:?}/{f} {b:02x?}");
-
-        let mut chunk_size = data[co + 1] as usize;
-        while !found {
-            // skip padding/alignment
-            co += chunk_size.next_multiple_of(16);
-            if co > po + PAGE_SIZE {
-                println!("WARN: not found");
-                break;
-            }
-            // next chunk
-            m = ChunkMeta::from(data[co]);
-            found = m.file_num() == file.file_num && m.chunk_type() != ChunkType::Unknown;
-            chunk_size = data[co + 1] as usize;
-        }
-
-        let f = if found { "+" } else { "." };
-        let b = &data[co..co + plen];
-        println!(" x: {m:?}/{f} {b:02x?}");
-
-        if EXTRACT && found {
-            use std::fs::File;
-            use std::io::Write;
-            let header_size = match m.chunk_type() {
-                ChunkType::Data | ChunkType::BigData => 5,
-                ChunkType::Rest => 2,
-                _ => 0,
-            };
-            // TODO: does this really make sense?!
-            // Could it be that we get a wrong chunk if chunk_size != flen?
-            if header_size < chunk_size {
-                let read_size = (chunk_size - header_size).min(flen);
-                let mut d = data[co + header_size..co + header_size + read_size].to_vec();
-                println!(
-                    "Read {} bytes from {chunk_size} bytes chunk @ {co:08x}",
-                    d.len()
-                );
-                if read_size < flen {
-                    let no = co + chunk_size.next_multiple_of(16);
-                    m = ChunkMeta::from(data[no]);
-                    let header_size = match m.chunk_type() {
-                        ChunkType::Data | ChunkType::BigData => 5,
-                        ChunkType::Rest => 2,
-                        _ => 0,
-                    };
-                    chunk_size = data[no + 1] as usize;
-                    let read_size = (chunk_size - header_size).min(flen);
-                    let n = &data[no + header_size..no + header_size + read_size].to_vec();
-                    d.extend_from_slice(n);
+                    let mut f = File::create(format!("xdump/{id}_{no}.bin")).unwrap();
+                    f.write_all(&res).unwrap();
                 }
-                let mut f = File::create(format!("xdump/{}.bin", file.id)).unwrap();
-                f.write_all(&d).unwrap();
-            } else {
-                println!("Unexpected: {header_size} >= {chunk_size} ({flen})");
             }
-        } else if EXTRACT {
-            println!("Skip");
+            Err(e) => println!("File {id} {no}: {e}"),
         }
     }
 

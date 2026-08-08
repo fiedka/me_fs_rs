@@ -592,4 +592,5 @@ if __name__ == "__main__":
         print("looking up file", fnum, first_file)
         result_tuple = get_mfs_file(mefs, spi_image_file, first_file)
         if result_tuple:
-            print("State: %x, data: %s\n" % tuple(result_tuple))
+            [state, data] = result_tuple
+            print(f"State: {state:x}, data: {data.hex(':')}\n")

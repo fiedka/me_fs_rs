@@ -30,6 +30,7 @@ crc = "3.2.1"
 serde = { version = "1.0.210", features = ["derive"] }
 serde-big-array = "0.5.1"
 serde_bytes = "0.11.15"
+strum = { version = "0.28.0", features = ["derive"] }
 zerocopy = "0.7.32"
 zerocopy-derive = "0.7.32"
 

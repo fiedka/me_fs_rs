@@ -314,26 +314,27 @@ pub enum DataReadResult {
 pub fn read_data(
     data: &[u8],
     page: &Page,
-    file: &FileEntry,
+    file_path: &FilePath,
+    file_size: usize,
     res: &mut Vec<u8>,
 ) -> Result<DataReadResult, DataReadError> {
     let n = page.header.num;
     let po = page.offset;
     // file offset key -> index translation
-    let k = file.path.offset_key as usize;
+    let k = file_path.offset_key as usize;
     let i = page.indices.0[k];
     // base offset
     let bo = i as usize * BLOCK_SIZE;
     // chunk offset
     let mut co = if bo == 0 { CHUNK_OFFSET } else { bo };
 
-    println!("Read data for file {file}, start seeking");
+    println!("Read data for path {file_path}, start seeking");
     println!("  page {n} @{po:08x}; {k} -> {i} / {bo:04x}|{co:04x}");
 
     if co >= PAGE_SIZE {
         return Err(DataReadError::UnexpectedChunkOffset);
     }
-    let flen = file.size as usize;
+    let flen = file_size;
     let Some(mut h) = ChunkHeader::read_from_prefix(&data[co..]) else {
         return Err(DataReadError::ChunkParseError);
     };
@@ -343,9 +344,8 @@ pub fn read_data(
 
     println!("seek, remaining: {remaining}");
     while remaining > 0 {
-        println!("seek");
-        // seek to chunk belonging to file
-        while seek && h.meta.file_num() != file.path.file_num {
+        // seek to first chunk belonging to file
+        while seek && h.meta.file_num() != file_path.file_num {
             println!("Skipping             {h} @ {:08x}", po + co);
             // next offset
             co += h.aligned();
@@ -367,16 +367,18 @@ pub fn read_data(
         let read_size = h.data_size().min(remaining);
         println!("Reading {read_size:4} bytes / {h} @ {:08x}", po + co);
         let cdo = h.meta.data_offset();
+        let o = co + cdo;
+        res.extend_from_slice(&data[o..o + read_size]);
+        // TODO: handle the Rust way
         if cdo == 5 {
             let p = FilePath::read_from_prefix(&data[co + 2..]).unwrap();
             println!("  continue: {p}");
-            // TODO: continue to read from respective page
-            if p.page != page.header.num {
-                return Ok(DataReadResult::Need(p));
+            // continue to read from respective page
+            if p.page == page.header.num {
+                println!("    same page");
             }
+            return Ok(DataReadResult::Need(p));
         }
-        let o = co + cdo;
-        res.extend_from_slice(&data[o..o + read_size]);
 
         // if h.meta.chunk_type() == ChunkType::Rest {
         //     // TODO: fill with `0`s?
@@ -405,7 +407,9 @@ fn process_file(i: usize, file: &FileEntry, pages: &[Page], data: &[u8]) {
 
     let mut d = vec![];
 
+    let ono = file_path.file_num;
     loop {
+        let no = file_path.file_num;
         // TODO: handle error
         let p = pages
             .iter()
@@ -413,10 +417,8 @@ fn process_file(i: usize, file: &FileEntry, pages: &[Page], data: &[u8]) {
             .unwrap();
         let po = p.offset;
 
-        let no = file_path.file_num;
-
         let page_data = &data[po..po + PAGE_SIZE];
-        match read_data(page_data, p, file, &mut d) {
+        match read_data(page_data, p, &file_path, file.size as usize, &mut d) {
             Ok(DataReadResult::Done) => {
                 let all_read = sz as usize == d.len();
                 let a = if all_read { "OK" } else { "NO" };
@@ -426,7 +428,7 @@ fn process_file(i: usize, file: &FileEntry, pages: &[Page], data: &[u8]) {
                     use std::fs::File;
                     use std::io::Write;
 
-                    let mut f = File::create(format!("xdump/{id}_{no}.bin")).unwrap();
+                    let mut f = File::create(format!("xdump/{id}_{ono}.bin")).unwrap();
                     f.write_all(&d).unwrap();
                 }
 

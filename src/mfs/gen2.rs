@@ -152,7 +152,7 @@ pub struct ChunkHeader {
 impl Display for ChunkHeader {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let fnum = self.meta.file_num();
-        let sz = self.size();
+        let sz = self.chunk_size();
         let ct = self.meta.chunk_type();
 
         write!(f, "{fnum:2}: {ct:4} {sz:5}B")
@@ -162,7 +162,7 @@ impl Display for ChunkHeader {
 const ALIGNMENT: usize = 16;
 
 impl ChunkHeader {
-    pub fn size(&self) -> usize {
+    pub fn chunk_size(&self) -> usize {
         if self.meta.chunk_type() == ChunkType::Big {
             self.size as usize * 0x100
         } else {
@@ -171,12 +171,12 @@ impl ChunkHeader {
     }
 
     pub fn data_size(&self) -> usize {
-        self.size() - self.meta.data_offset()
+        self.chunk_size() - self.meta.data_offset()
     }
 
     pub fn aligned(&self) -> usize {
         // chunks are 16-byte aligned, filled with 0xff to the end
-        let s = self.size();
+        let s = self.chunk_size();
         if s.is_multiple_of(ALIGNMENT) {
             s
         } else {
@@ -313,6 +313,7 @@ pub fn read_file(data: &[u8], page: &Page, file: &FileEntry) -> Result<Vec<u8>, 
     while remaining > 0 {
         // seek to chunk belonging to file
         while h.meta.file_num() != file.file_num {
+            println!("Skipping             {h} @ {:08x}", po + co);
             // next offset
             co += h.aligned();
             if co > PAGE_SIZE - ALIGNMENT {
@@ -329,7 +330,7 @@ pub fn read_file(data: &[u8], page: &Page, file: &FileEntry) -> Result<Vec<u8>, 
         }
 
         // A chunk must not cross the page boundary.
-        if co + h.size() > PAGE_SIZE {
+        if co + h.chunk_size() > PAGE_SIZE {
             return Err(FileReadError::UnexpectedChunkSize);
         }
 

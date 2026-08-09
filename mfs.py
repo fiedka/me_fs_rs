@@ -122,9 +122,14 @@ class MEFileSystemFileMetadataStateMachine:
 
         bo = self.byte_offset
         if self.work_buf:
+            # NOTE: This mutates self.cur_meta !
             self.work_buf[bo:(bo+to_copy)] = bytes[start_index:(start_index+to_copy)]
             self.byte_offset = self.byte_offset + to_copy
         self.bytes_needed = self.bytes_needed - to_copy
+
+        meta_type = self.cur_meta[0] & 0xf0
+        log.write(f"  bytes to copy: {to_copy:04x}, ")
+        log.write(f"metadata type: 0x{meta_type:02x} @ {bo:08x}\n")
 
         # if we don't have enough to process, return so they can feed more
         if self.bytes_needed > 0:
@@ -132,8 +137,6 @@ class MEFileSystemFileMetadataStateMachine:
             return to_copy
 
         # we only make it this far once we've got the full bytes_needed data
-        meta_type = self.cur_meta[0] & 0xf0
-        log.write(f"metadata type: 0x{meta_type:02x} @ {bo:08x}\n")
         if self.state == self.STATE_NEED_META:
             if self.byte_offset == 1:
                 if meta_type in [0xa0, 0xb0]:
@@ -593,4 +596,5 @@ if __name__ == "__main__":
         result_tuple = get_mfs_file(mefs, spi_image_file, first_file)
         if result_tuple:
             [state, data] = result_tuple
-            print(f"State: {state:x}, data: {data.hex(':')}\n")
+            print(f"State: {state:x}\n")
+            #print(f" data: {data.hex(':')}\n")

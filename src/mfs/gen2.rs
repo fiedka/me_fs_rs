@@ -219,6 +219,24 @@ impl Display for FileId {
 
 #[derive(FromBytes, FromZeroes, Serialize, Deserialize, Clone, Copy, Debug)]
 #[repr(C, packed)]
+pub struct FilePath {
+    pub page: u8,
+    pub offset_key: u8,
+    pub file_num: u8,
+}
+
+impl Display for FilePath {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let no = self.file_num;
+        let ok = self.offset_key;
+        let pg = self.page;
+
+        write!(f, "p{pg:3}/k{ok:3}/n{no:3}")
+    }
+}
+
+#[derive(FromBytes, FromZeroes, Serialize, Deserialize, Clone, Copy, Debug)]
+#[repr(C, packed)]
 pub struct FileEntry {
     pub state: u8,
     pub flags: u8,
@@ -228,9 +246,7 @@ pub struct FileEntry {
     pub owner: u8, // not sure
     pub size: u16,
 
-    pub page: u8,
-    pub offset_key: u8,
-    pub file_num: u8,
+    pub path: FilePath,
 }
 
 impl Display for FileEntry {
@@ -240,11 +256,7 @@ impl Display for FileEntry {
         let st = self.state;
         let fl = self.flags;
         let ow = self.owner;
-        let no = self.file_num;
-        let ok = self.offset_key;
-        let pg = self.page;
-
-        let l = format!("p{pg:3}/k{ok:3}/n{no:3}");
+        let p = self.path;
 
         // apparently, some special values occur frequently
         // let m = match st {
@@ -266,7 +278,7 @@ impl Display for FileEntry {
         let sth = st >> 4;
         let tt = format!("{st:02x} ({sth:04b} {stl:04b})");
 
-        write!(f, "{id} {sz:5} {ow:02x}  {l}  {tt}, {fl:04b}{fli}")
+        write!(f, "{id} {sz:5} {ow:02x}  {p}  {tt}, {fl:04b}{fli}")
     }
 }
 
@@ -295,7 +307,7 @@ pub fn read_file(data: &[u8], page: &Page, file: &FileEntry) -> Result<Vec<u8>, 
     let n = page.header.num;
     let po = page.offset;
     // file offset key -> index translation
-    let k = file.offset_key as usize;
+    let k = file.path.offset_key as usize;
     let i = page.indices.0[k];
     // base offset
     let bo = i as usize * BLOCK_SIZE;
@@ -313,7 +325,10 @@ pub fn read_file(data: &[u8], page: &Page, file: &FileEntry) -> Result<Vec<u8>, 
     let mut seek = true;
     while remaining > 0 {
         // seek to chunk belonging to file
-        while seek && h.meta.file_num() != file.file_num {
+        while seek
+            && h.meta.file_num() != file.path.file_num
+            && !(!seek && h.meta.file_num() == 0 && h.meta.chunk_type() == ChunkType::Rest)
+        {
             println!("Skipping             {h} @ {:08x}", po + co);
             // next offset
             co += h.aligned();
@@ -338,19 +353,25 @@ pub fn read_file(data: &[u8], page: &Page, file: &FileEntry) -> Result<Vec<u8>, 
 
         let read_size = h.data_size().min(remaining);
         println!("Reading {read_size:4} bytes / {h} @ {:08x}", po + co);
-        let o = co + h.meta.data_offset();
+        let cdo = h.meta.data_offset();
+        if cdo == 5 {
+            let p = FilePath::read_from_prefix(&data[co + 2..]).unwrap();
+            println!("  {p}");
+        }
+        let o = co + cdo;
         d.extend_from_slice(&data[o..o + read_size]);
 
-        if h.meta.chunk_type() == ChunkType::Rest {
-            // TODO: fill with `0`s?
-            return Ok(d);
-        }
+        // if h.meta.chunk_type() == ChunkType::Rest {
+        //     // TODO: fill with `0`s?
+        //     return Ok(d);
+        // }
         remaining = flen - d.len();
 
         // next offset / chunk
         co += h.aligned();
         if co > PAGE_SIZE - ALIGNMENT {
-            return Err(FileReadError::UnexpectedChunkSize);
+            return Ok(d);
+            // return Err(FileReadError::UnexpectedChunkSize);
         }
         if h.meta.chunk_type() == ChunkType::Unknown {
             return Err(FileReadError::UnknownChunk);
@@ -363,17 +384,23 @@ pub fn read_file(data: &[u8], page: &Page, file: &FileEntry) -> Result<Vec<u8>, 
 
 fn process_file(i: usize, file: &FileEntry, pages: &[Page], data: &[u8]) {
     // TODO: handle error
-    let p = pages.iter().find(|p| p.header.num == file.page).unwrap();
+    let p = pages
+        .iter()
+        .find(|p| p.header.num == file.path.page)
+        .unwrap();
     let po = p.offset;
 
     let id = file.id;
-    let no = file.file_num;
+    let no = file.path.file_num;
     let sz = file.size;
 
     let page_data = &data[po..po + PAGE_SIZE];
     match read_file(page_data, p, file) {
         Ok(res) => {
-            println!("File #{i:3} / {id}_{no}: read {}/{sz}", res.len());
+            let all_read = sz as usize == res.len();
+            let a = if all_read { "OK" } else { "NO" };
+            println!("File #{i:3} / {id}_{no}: read {}/{sz} {a}", res.len());
+
             if EXTRACT {
                 use std::fs::File;
                 use std::io::Write;

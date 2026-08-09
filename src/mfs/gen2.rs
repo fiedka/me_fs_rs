@@ -133,7 +133,7 @@ pub struct ChunkMeta {
 }
 
 impl ChunkMeta {
-    pub fn header_size(&self) -> usize {
+    pub fn data_offset(&self) -> usize {
         match self.chunk_type() {
             ChunkType::Data | ChunkType::Big => 5,
             ChunkType::Rest => 2,
@@ -171,7 +171,7 @@ impl ChunkHeader {
     }
 
     pub fn data_size(&self) -> usize {
-        self.size() - self.meta.header_size()
+        self.size() - self.meta.data_offset()
     }
 
     pub fn aligned(&self) -> usize {
@@ -316,7 +316,11 @@ pub fn read_file(data: &[u8], page: &Page, file: &FileEntry) -> Result<Vec<u8>, 
             // next offset
             co += h.aligned();
             if co > PAGE_SIZE - ALIGNMENT {
-                return Err(FileReadError::NotInPage);
+                // best effort
+                if d.is_empty() {
+                    return Err(FileReadError::NotInPage);
+                }
+                return Ok(d);
             }
             if h.meta.chunk_type() == ChunkType::Unknown {
                 return Err(FileReadError::UnknownChunk);
@@ -328,12 +332,18 @@ pub fn read_file(data: &[u8], page: &Page, file: &FileEntry) -> Result<Vec<u8>, 
         if co + h.size() > PAGE_SIZE {
             return Err(FileReadError::UnexpectedChunkSize);
         }
-        let read_size = h.data_size().min(remaining);
 
+        let read_size = h.data_size().min(remaining);
         println!("Reading {read_size:4} bytes / {h} @ {:08x}", po + co);
-        let o = co + h.meta.header_size();
-        let n = &data[o..o + read_size];
-        d.extend_from_slice(n);
+        let o = co + h.meta.data_offset();
+        d.extend_from_slice(&data[o..o + read_size]);
+
+        /*
+        if h.meta.chunk_type() == ChunkType::Rest {
+            // TODO: fill with `0`s?
+            return Ok(d);
+        }
+        */
         remaining = flen - d.len();
 
         // next offset / chunk
@@ -579,7 +589,7 @@ pub fn parse(data: &[u8], verbose: bool) -> Result<bool, String> {
         let page = &data[po..po + PAGE_SIZE];
         match read_file(page, p, file) {
             Ok(res) => {
-                println!("Read {}/{}", res.len(), sz);
+                println!("File #{f:3} / {id}_{no}: read {}/{sz}", res.len());
                 if EXTRACT {
                     use std::fs::File;
                     use std::io::Write;
@@ -588,7 +598,7 @@ pub fn parse(data: &[u8], verbose: bool) -> Result<bool, String> {
                     f.write_all(&res).unwrap();
                 }
             }
-            Err(e) => println!("File {id} {no}: {e}"),
+            Err(e) => println!("File #{f:3} / {id}_{no}: {e}"),
         }
     }
 

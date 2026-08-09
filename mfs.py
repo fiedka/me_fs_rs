@@ -120,8 +120,8 @@ class MEFileSystemFileMetadataStateMachine:
         # take the min of what's available and what we need
         to_copy = data_len if data_len < self.bytes_needed else self.bytes_needed
 
+        bo = self.byte_offset
         if self.work_buf:
-            bo = self.byte_offset
             self.work_buf[bo:(bo+to_copy)] = bytes[start_index:(start_index+to_copy)]
             self.byte_offset = self.byte_offset + to_copy
         self.bytes_needed = self.bytes_needed - to_copy
@@ -133,7 +133,7 @@ class MEFileSystemFileMetadataStateMachine:
 
         # we only make it this far once we've got the full bytes_needed data
         meta_type = self.cur_meta[0] & 0xf0
-        log.write("metadata type: 0x%02x\n" % meta_type)
+        log.write(f"metadata type: 0x{meta_type:02x} @ {bo:08x}\n")
         if self.state == self.STATE_NEED_META:
             if self.byte_offset == 1:
                 if meta_type in [0xa0, 0xb0]:
@@ -150,7 +150,7 @@ class MEFileSystemFileMetadataStateMachine:
                 else:
                     self.state = self.STATE_NEED_SKIP_DATA
                     self.work_buf = None
-                    self.byte_offset = None
+                    self.byte_offset = 0
 
                 # determine the data required based on metadata type, and
                 # whether we're skipping (so need to eat EOF padding on type
@@ -217,7 +217,7 @@ class MEFileSystemFileMetadataStateMachine:
 def read_me_fs_file(file_no, file_len, me_file, log = sys.stdout):
     sm = MEFileSystemFileMetadataStateMachine(file_no, file_len)
 
-    log.write("read file %d\n" % file_no)
+    log.write("read file with fno %d\n" % file_no)
     while not sm.is_complete():
         res = sm.add_bytes(
             bytes=me_file.read(sm.get_bytes_needed()), 

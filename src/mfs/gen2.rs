@@ -244,7 +244,7 @@ impl Display for FileEntry {
         let ok = self.offset_key;
         let pg = self.page;
 
-        let l = format!("{pg:02x}/{ok:02x}/{no:02x}");
+        let l = format!("p{pg:3}/k{ok:3}/n{no:3}");
 
         // apparently, some special values occur frequently
         // let m = match st {
@@ -310,9 +310,10 @@ pub fn read_file(data: &[u8], page: &Page, file: &FileEntry) -> Result<Vec<u8>, 
     let mut h = ChunkHeader::read_from_prefix(&data[co..]).unwrap();
 
     let mut remaining = flen;
+    let mut seek = true;
     while remaining > 0 {
         // seek to chunk belonging to file
-        while h.meta.file_num() != file.file_num {
+        while seek && h.meta.file_num() != file.file_num {
             println!("Skipping             {h} @ {:08x}", po + co);
             // next offset
             co += h.aligned();
@@ -328,6 +329,7 @@ pub fn read_file(data: &[u8], page: &Page, file: &FileEntry) -> Result<Vec<u8>, 
             }
             h = ChunkHeader::read_from_prefix(&data[co..]).unwrap();
         }
+        seek = false;
 
         // A chunk must not cross the page boundary.
         if co + h.chunk_size() > PAGE_SIZE {
@@ -339,12 +341,10 @@ pub fn read_file(data: &[u8], page: &Page, file: &FileEntry) -> Result<Vec<u8>, 
         let o = co + h.meta.data_offset();
         d.extend_from_slice(&data[o..o + read_size]);
 
-        /*
         if h.meta.chunk_type() == ChunkType::Rest {
             // TODO: fill with `0`s?
             return Ok(d);
         }
-        */
         remaining = flen - d.len();
 
         // next offset / chunk
@@ -359,6 +359,31 @@ pub fn read_file(data: &[u8], page: &Page, file: &FileEntry) -> Result<Vec<u8>, 
     }
 
     Ok(d.to_vec())
+}
+
+fn process_file(i: usize, file: &FileEntry, pages: &[Page], data: &[u8]) {
+    // TODO: handle error
+    let p = pages.iter().find(|p| p.header.num == file.page).unwrap();
+    let po = p.offset;
+
+    let id = file.id;
+    let no = file.file_num;
+    let sz = file.size;
+
+    let page_data = &data[po..po + PAGE_SIZE];
+    match read_file(page_data, p, file) {
+        Ok(res) => {
+            println!("File #{i:3} / {id}_{no}: read {}/{sz}", res.len());
+            if EXTRACT {
+                use std::fs::File;
+                use std::io::Write;
+
+                let mut f = File::create(format!("xdump/{id}_{no}.bin")).unwrap();
+                f.write_all(&res).unwrap();
+            }
+        }
+        Err(e) => println!("File #{i:3} / {id}_{no}: error {e}"),
+    }
 }
 
 pub fn parse(data: &[u8], verbose: bool) -> Result<bool, String> {
@@ -576,32 +601,17 @@ pub fn parse(data: &[u8], verbose: bool) -> Result<bool, String> {
     println!("{total_live_chunks} live chunks total, {total_active_chunks} active");
     println!("{total_dead_chunks} dead chunks total");
 
-    for f in 0..140 {
-        println!();
-        let file = log.get(f).unwrap();
-
-        // TODO: handle error
-        let p = pages.iter().find(|p| p.header.num == file.page).unwrap();
-        let po = p.offset;
-        let sz = file.size;
-        let id = file.id;
-        let no = file.file_num;
-
-        let page = &data[po..po + PAGE_SIZE];
-        match read_file(page, p, file) {
-            Ok(res) => {
-                println!("File #{f:3} / {id}_{no}: read {}/{sz}", res.len());
-                if EXTRACT {
-                    use std::fs::File;
-                    use std::io::Write;
-
-                    let mut f = File::create(format!("xdump/{id}_{no}.bin")).unwrap();
-                    f.write_all(&res).unwrap();
-                }
-            }
-            Err(e) => println!("File #{f:3} / {id}_{no}: {e}"),
+    if true {
+        for i in 0..140 {
+            let file = log.get(i).unwrap();
+            process_file(i, file, &pages, data);
+            println!();
         }
     }
+
+    // let i = 92;
+    // let file = log.get(i).unwrap();
+    // process_file(i, file, &pages, data);
 
     Ok(true)
 }

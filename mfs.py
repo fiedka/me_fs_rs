@@ -119,6 +119,7 @@ class MEFileSystemFileMetadataStateMachine:
 
         # take the min of what's available and what we need
         to_copy = data_len if data_len < self.bytes_needed else self.bytes_needed
+        log.write(f"  {self.state} bytes to copy: {to_copy:04x}, data {data_len:04x}, need {self.bytes_needed:04x}, ")
 
         bo = self.byte_offset
         if self.work_buf:
@@ -128,7 +129,6 @@ class MEFileSystemFileMetadataStateMachine:
         self.bytes_needed = self.bytes_needed - to_copy
 
         meta_type = self.cur_meta[0] & 0xf0
-        log.write(f"  bytes to copy: {to_copy:04x}, ")
         log.write(f"metadata type: 0x{meta_type:02x} @ {bo:08x}\n")
 
         # if we don't have enough to process, return so they can feed more
@@ -209,11 +209,12 @@ class MEFileSystemFileMetadataStateMachine:
             if log:
                 log.write("Bad state-machine state: %d\n" % self.state)
 
-        #recurse to consume as much as we can, for easier calling convention
+        # if not done yet, recurse for easier calling convention
         if to_copy < data_len:
+            if log:
+                log.write("     Recurse \n")
             return  to_copy + add_bytes(bytes, start_index+to_copy, data_len-to_copy)
 
-        #else, return what we consumed
         return to_copy
 
 
@@ -589,7 +590,7 @@ if __name__ == "__main__":
         mefs.allocation_table.debug_print()
         print("")
 
-        fnum = 92
+        fnum = 49
         file = mefs.allocation_table.entry_list[fnum]
         first_file = file.identifier
         print("looking up file", fnum, first_file)
@@ -597,4 +598,4 @@ if __name__ == "__main__":
         if result_tuple:
             [state, data] = result_tuple
             print(f"State: {state:x}\n")
-            #print(f" data: {data.hex(':')}\n")
+            print(f" data: {data.hex(':')}\n")

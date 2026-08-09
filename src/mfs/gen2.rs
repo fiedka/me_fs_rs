@@ -325,10 +325,7 @@ pub fn read_file(data: &[u8], page: &Page, file: &FileEntry) -> Result<Vec<u8>, 
     let mut seek = true;
     while remaining > 0 {
         // seek to chunk belonging to file
-        while seek
-            && h.meta.file_num() != file.path.file_num
-            && !(!seek && h.meta.file_num() == 0 && h.meta.chunk_type() == ChunkType::Rest)
-        {
+        while seek && h.meta.file_num() != file.path.file_num {
             println!("Skipping             {h} @ {:08x}", po + co);
             // next offset
             co += h.aligned();
@@ -355,6 +352,7 @@ pub fn read_file(data: &[u8], page: &Page, file: &FileEntry) -> Result<Vec<u8>, 
         println!("Reading {read_size:4} bytes / {h} @ {:08x}", po + co);
         let cdo = h.meta.data_offset();
         if cdo == 5 {
+            // TODO: continue to read from respective page
             let p = FilePath::read_from_prefix(&data[co + 2..]).unwrap();
             println!("  {p}");
         }

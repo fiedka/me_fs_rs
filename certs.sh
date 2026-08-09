@@ -1,5 +1,5 @@
 #!/bin/sh
-ls \
+ls $@ \
   xdump/004800_*.bin \
   xdump/014800_*.bin \
   xdump/024800_*.bin \

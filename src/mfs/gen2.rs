@@ -297,13 +297,26 @@ const CHUNK_OFFSET: usize = PAGE_HEADER_LENGTH + INDICES_SIZE;
 const BLOCK_SIZE: usize = 0x100;
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Display)]
-pub enum FileReadError {
+pub enum DataReadError {
     NotInPage,
     UnexpectedChunkSize,
+    UnexpectedChunkOffset,
     UnknownChunk,
+    ChunkParseError,
 }
 
-pub fn read_file(data: &[u8], page: &Page, file: &FileEntry) -> Result<Vec<u8>, FileReadError> {
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Display)]
+pub enum DataReadResult {
+    Done,
+    Need(FilePath),
+}
+
+pub fn read_data(
+    data: &[u8],
+    page: &Page,
+    file: &FileEntry,
+    res: &mut Vec<u8>,
+) -> Result<DataReadResult, DataReadError> {
     let n = page.header.num;
     let po = page.offset;
     // file offset key -> index translation
@@ -314,30 +327,33 @@ pub fn read_file(data: &[u8], page: &Page, file: &FileEntry) -> Result<Vec<u8>, 
     // chunk offset
     let mut co = if bo == 0 { CHUNK_OFFSET } else { bo };
 
-    println!("file {file}");
-    println!(" in page {n} @{po:08x}; {k} -> {i} / {bo:04x}");
+    println!("Read data for file {file}, start seeking");
+    println!("  page {n} @{po:08x}; {k} -> {i} / {bo:04x}|{co:04x}");
 
+    if co >= PAGE_SIZE {
+        return Err(DataReadError::UnexpectedChunkOffset);
+    }
     let flen = file.size as usize;
-    let mut d = vec![];
-    let mut h = ChunkHeader::read_from_prefix(&data[co..]).unwrap();
+    let Some(mut h) = ChunkHeader::read_from_prefix(&data[co..]) else {
+        return Err(DataReadError::ChunkParseError);
+    };
 
-    let mut remaining = flen;
+    let mut remaining = flen - res.len();
     let mut seek = true;
+
+    println!("seek, remaining: {remaining}");
     while remaining > 0 {
+        println!("seek");
         // seek to chunk belonging to file
         while seek && h.meta.file_num() != file.path.file_num {
             println!("Skipping             {h} @ {:08x}", po + co);
             // next offset
             co += h.aligned();
             if co > PAGE_SIZE - ALIGNMENT {
-                // best effort
-                if d.is_empty() {
-                    return Err(FileReadError::NotInPage);
-                }
-                return Ok(d);
+                return Err(DataReadError::NotInPage);
             }
             if h.meta.chunk_type() == ChunkType::Unknown {
-                return Err(FileReadError::UnknownChunk);
+                return Err(DataReadError::UnknownChunk);
             }
             h = ChunkHeader::read_from_prefix(&data[co..]).unwrap();
         }
@@ -345,69 +361,86 @@ pub fn read_file(data: &[u8], page: &Page, file: &FileEntry) -> Result<Vec<u8>, 
 
         // A chunk must not cross the page boundary.
         if co + h.chunk_size() > PAGE_SIZE {
-            return Err(FileReadError::UnexpectedChunkSize);
+            return Err(DataReadError::UnexpectedChunkSize);
         }
 
         let read_size = h.data_size().min(remaining);
         println!("Reading {read_size:4} bytes / {h} @ {:08x}", po + co);
         let cdo = h.meta.data_offset();
         if cdo == 5 {
-            // TODO: continue to read from respective page
             let p = FilePath::read_from_prefix(&data[co + 2..]).unwrap();
-            println!("  {p}");
+            println!("  continue: {p}");
+            // TODO: continue to read from respective page
+            if p.page != page.header.num {
+                return Ok(DataReadResult::Need(p));
+            }
         }
         let o = co + cdo;
-        d.extend_from_slice(&data[o..o + read_size]);
+        res.extend_from_slice(&data[o..o + read_size]);
 
         // if h.meta.chunk_type() == ChunkType::Rest {
         //     // TODO: fill with `0`s?
         //     return Ok(d);
         // }
-        remaining = flen - d.len();
+        remaining = flen - res.len();
 
         // next offset / chunk
         co += h.aligned();
         if co > PAGE_SIZE - ALIGNMENT {
-            return Ok(d);
-            // return Err(FileReadError::UnexpectedChunkSize);
+            return Err(DataReadError::UnexpectedChunkSize);
         }
         if h.meta.chunk_type() == ChunkType::Unknown {
-            return Err(FileReadError::UnknownChunk);
+            return Err(DataReadError::UnknownChunk);
         }
         h = ChunkHeader::read_from_prefix(&data[co..]).unwrap();
     }
 
-    Ok(d.to_vec())
+    Ok(DataReadResult::Done)
 }
 
 fn process_file(i: usize, file: &FileEntry, pages: &[Page], data: &[u8]) {
-    // TODO: handle error
-    let p = pages
-        .iter()
-        .find(|p| p.header.num == file.path.page)
-        .unwrap();
-    let po = p.offset;
-
     let id = file.id;
-    let no = file.path.file_num;
     let sz = file.size;
+    let mut file_path = file.path;
 
-    let page_data = &data[po..po + PAGE_SIZE];
-    match read_file(page_data, p, file) {
-        Ok(res) => {
-            let all_read = sz as usize == res.len();
-            let a = if all_read { "OK" } else { "NO" };
-            println!("File #{i:3} / {id}_{no}: read {}/{sz} {a}", res.len());
+    let mut d = vec![];
 
-            if EXTRACT {
-                use std::fs::File;
-                use std::io::Write;
+    loop {
+        // TODO: handle error
+        let p = pages
+            .iter()
+            .find(|p| p.header.num == file_path.page)
+            .unwrap();
+        let po = p.offset;
 
-                let mut f = File::create(format!("xdump/{id}_{no}.bin")).unwrap();
-                f.write_all(&res).unwrap();
+        let no = file_path.file_num;
+
+        let page_data = &data[po..po + PAGE_SIZE];
+        match read_data(page_data, p, file, &mut d) {
+            Ok(DataReadResult::Done) => {
+                let all_read = sz as usize == d.len();
+                let a = if all_read { "OK" } else { "NO" };
+                println!("File #{i:3} / {id}_{no}: read {}/{sz} {a}", d.len());
+
+                if EXTRACT {
+                    use std::fs::File;
+                    use std::io::Write;
+
+                    let mut f = File::create(format!("xdump/{id}_{no}.bin")).unwrap();
+                    f.write_all(&d).unwrap();
+                }
+
+                break;
+            }
+            Ok(DataReadResult::Need(p)) => {
+                println!("File #{i:3} / {id}_{no}: read {}/{sz}, need more", d.len());
+                file_path = p;
+            }
+            Err(e) => {
+                println!("File #{i:3} / {id}_{no}: read {}/{sz}, error {e}", d.len());
+                return;
             }
         }
-        Err(e) => println!("File #{i:3} / {id}_{no}: error {e}"),
     }
 }
 

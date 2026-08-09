@@ -155,7 +155,7 @@ impl Display for ChunkHeader {
         let sz = self.size();
         let ct = self.meta.chunk_type();
 
-        write!(f, "{fnum:2} {ct:4} {sz:5}")
+        write!(f, "{fnum:2}: {ct:4} {sz:5}B")
     }
 }
 
@@ -168,6 +168,10 @@ impl ChunkHeader {
         } else {
             self.size as usize
         }
+    }
+
+    pub fn data_size(&self) -> usize {
+        self.size() - self.meta.header_size()
     }
 
     pub fn aligned(&self) -> usize {
@@ -283,8 +287,8 @@ const BLOCK_SIZE: usize = 0x100;
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Display)]
 pub enum FileReadError {
     NotInPage,
-    NotFound,
     UnexpectedChunkSize,
+    UnknownChunk,
 }
 
 pub fn read_file(data: &[u8], page: &Page, file: &FileEntry) -> Result<Vec<u8>, FileReadError> {
@@ -296,72 +300,54 @@ pub fn read_file(data: &[u8], page: &Page, file: &FileEntry) -> Result<Vec<u8>, 
     // base offset
     let bo = i as usize * BLOCK_SIZE;
     // chunk offset
-    let mut co = if bo == 0 { PAGE_HEADER_LENGTH } else { bo };
+    let mut co = if bo == 0 { CHUNK_OFFSET } else { bo };
 
     println!("file {file}");
     println!(" in page {n} @{po:08x}; {k} -> {i} / {bo:04x}");
 
     let flen = file.size as usize;
-
-    let mut h = ChunkHeader::read_from_prefix(&data[co..]).unwrap();
-    let mut found = h.meta.file_num() == file.file_num && h.meta.chunk_type() != ChunkType::Unknown;
-
-    while !found {
-        // see next chunk
-        co += h.aligned();
-        if co >= PAGE_SIZE {
-            return Err(FileReadError::NotInPage);
-        }
-        h = ChunkHeader::read_from_prefix(&data[co..]).unwrap();
-        found = h.meta.file_num() == file.file_num && h.meta.chunk_type() != ChunkType::Unknown;
-    }
-
-    let header_size = h.meta.header_size();
-    let mut chunk_size = h.size();
     let mut d = vec![];
-    // safety check
-    if header_size < chunk_size {
-        let mut read_size = (chunk_size - header_size).min(flen);
-        let o = co + header_size;
-        let n = &data[o..o + read_size];
-        d.extend_from_slice(n);
-        println!(
-            "Read {read_size} bytes from {chunk_size} bytes chunk @ {:08x}",
-            po + co
-        );
-        while read_size < flen && d.len() < flen {
-            found = h.meta.file_num() == file.file_num && h.meta.chunk_type() != ChunkType::Unknown;
-            while !found {
-                // see next chunk
-                co += h.aligned();
-                if co >= PAGE_SIZE {
-                    return Err(FileReadError::NotInPage);
-                }
-                h = ChunkHeader::read_from_prefix(&data[co..]).unwrap();
-                found =
-                    h.meta.file_num() == file.file_num && h.meta.chunk_type() != ChunkType::Unknown;
-            }
+    let mut h = ChunkHeader::read_from_prefix(&data[co..]).unwrap();
 
+    let mut remaining = flen;
+    while remaining > 0 {
+        // seek to chunk belonging to file
+        while h.meta.file_num() != file.file_num {
             // next offset
             co += h.aligned();
-            println!(
-                "Read {read_size} bytes from {chunk_size} bytes chunk @ {:08x}",
-                po + co
-            );
+            if co > PAGE_SIZE - ALIGNMENT {
+                return Err(FileReadError::NotInPage);
+            }
+            if h.meta.chunk_type() == ChunkType::Unknown {
+                return Err(FileReadError::UnknownChunk);
+            }
             h = ChunkHeader::read_from_prefix(&data[co..]).unwrap();
-            let header_size = h.meta.header_size();
-            chunk_size = h.size();
-            read_size = (chunk_size - header_size).min(flen);
-            let o = co + header_size;
-            let n = &data[o..o + read_size];
-            d.extend_from_slice(n);
         }
 
-        Ok(d.to_vec())
-    } else {
-        println!("Unexpected: {header_size} >= {chunk_size} ({flen})");
-        Err(FileReadError::UnexpectedChunkSize)
+        // A chunk must not cross the page boundary.
+        if co + h.size() > PAGE_SIZE {
+            return Err(FileReadError::UnexpectedChunkSize);
+        }
+        let read_size = h.data_size().min(remaining);
+
+        println!("Reading {read_size:4} bytes / {h} @ {:08x}", po + co);
+        let o = co + h.meta.header_size();
+        let n = &data[o..o + read_size];
+        d.extend_from_slice(n);
+        remaining = flen - d.len();
+
+        // next offset / chunk
+        co += h.aligned();
+        if co > PAGE_SIZE - ALIGNMENT {
+            return Err(FileReadError::UnexpectedChunkSize);
+        }
+        if h.meta.chunk_type() == ChunkType::Unknown {
+            return Err(FileReadError::UnknownChunk);
+        }
+        h = ChunkHeader::read_from_prefix(&data[co..]).unwrap();
     }
+
+    Ok(d.to_vec())
 }
 
 pub fn parse(data: &[u8], verbose: bool) -> Result<bool, String> {

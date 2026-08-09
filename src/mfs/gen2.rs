@@ -93,6 +93,7 @@ enum ChunkType {
     Rest,
     Data,
     Big,
+    BigRest,
     Unknown,
 }
 
@@ -100,6 +101,7 @@ impl From<u8> for ChunkType {
     fn from(value: u8) -> Self {
         match value {
             0b1000 => Self::Rest,
+            0b1001 => Self::BigRest,
             0b1010 => Self::Data,
             0b1011 => Self::Big,
             _ => Self::Unknown,
@@ -112,6 +114,7 @@ impl ChunkType {
     const fn from_bits(val: u8) -> Self {
         match val & 0xf {
             0b1000 => Self::Rest,
+            0b1001 => Self::BigRest,
             0b1010 => Self::Data,
             0b1011 => Self::Big,
             _ => Self::Unknown,
@@ -136,7 +139,7 @@ impl ChunkMeta {
     pub fn data_offset(&self) -> usize {
         match self.chunk_type() {
             ChunkType::Data | ChunkType::Big => 5,
-            ChunkType::Rest => 2,
+            ChunkType::Rest | ChunkType::BigRest => 2,
             _ => 0,
         }
     }
@@ -163,7 +166,8 @@ const ALIGNMENT: usize = 16;
 
 impl ChunkHeader {
     pub fn chunk_size(&self) -> usize {
-        if self.meta.chunk_type() == ChunkType::Big {
+        if self.meta.chunk_type() == ChunkType::Big || self.meta.chunk_type() == ChunkType::BigRest
+        {
             self.size as usize * 0x100
         } else {
             self.size as usize
@@ -386,15 +390,17 @@ pub fn read_data(
         // }
         remaining = flen - res.len();
 
-        // next offset / chunk
-        co += h.aligned();
-        if co > PAGE_SIZE - ALIGNMENT {
-            return Err(DataReadError::UnexpectedChunkSize);
+        if remaining > 0 {
+            // next offset / chunk
+            co += h.aligned();
+            if co > PAGE_SIZE - ALIGNMENT {
+                return Err(DataReadError::UnexpectedChunkSize);
+            }
+            if h.meta.chunk_type() == ChunkType::Unknown {
+                return Err(DataReadError::UnknownChunk);
+            }
+            h = ChunkHeader::read_from_prefix(&data[co..]).unwrap();
         }
-        if h.meta.chunk_type() == ChunkType::Unknown {
-            return Err(DataReadError::UnknownChunk);
-        }
-        h = ChunkHeader::read_from_prefix(&data[co..]).unwrap();
     }
 
     Ok(DataReadResult::Done)

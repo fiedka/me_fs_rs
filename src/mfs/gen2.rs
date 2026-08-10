@@ -347,7 +347,7 @@ pub fn read_data(
     let mut seek = true;
 
     println!("seek, remaining: {remaining}");
-    while remaining > 0 {
+    loop {
         // seek to first chunk belonging to file
         while seek && h.meta.file_num() != file_path.file_num {
             println!("Skipping             {h} @ {:08x}", po + co);
@@ -373,37 +373,30 @@ pub fn read_data(
         let cdo = h.meta.data_offset();
         let o = co + cdo;
         res.extend_from_slice(&data[o..o + read_size]);
+        remaining = flen - res.len();
+
         // TODO: handle the Rust way
         if cdo == 5 {
             let p = FilePath::read_from_prefix(&data[co + 2..]).unwrap();
-            println!("  continue: {p}");
             // continue to read from respective page
-            if p.page == page.header.num {
-                println!("    same page");
-            }
             return Ok(DataReadResult::Need(p));
         }
 
-        // if h.meta.chunk_type() == ChunkType::Rest {
-        //     // TODO: fill with `0`s?
-        //     return Ok(d);
-        // }
-        remaining = flen - res.len();
-
-        if remaining > 0 {
-            // next offset / chunk
-            co += h.aligned();
-            if co > PAGE_SIZE - ALIGNMENT {
-                return Err(DataReadError::UnexpectedChunkSize);
-            }
-            if h.meta.chunk_type() == ChunkType::Unknown {
-                return Err(DataReadError::UnknownChunk);
-            }
-            h = ChunkHeader::read_from_prefix(&data[co..]).unwrap();
+        // We are done if we reached the desired length of the file.
+        if remaining == 0 {
+            return Ok(DataReadResult::Done);
         }
-    }
 
-    Ok(DataReadResult::Done)
+        // Look at the next offset / chunk.
+        co += h.aligned();
+        if co > PAGE_SIZE - ALIGNMENT {
+            return Err(DataReadError::UnexpectedChunkSize);
+        }
+        if h.meta.chunk_type() == ChunkType::Unknown {
+            return Err(DataReadError::UnknownChunk);
+        }
+        h = ChunkHeader::read_from_prefix(&data[co..]).unwrap();
+    }
 }
 
 fn process_file(i: usize, file: &FileEntry, pages: &[Page], data: &[u8]) {

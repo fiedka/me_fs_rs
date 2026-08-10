@@ -334,12 +334,11 @@ pub fn read_data(
     let mut co = if bo == 0 { CHUNK_OFFSET } else { bo };
 
     println!("Read data for path {file_path}, start seeking");
-    println!("  page {n} @{po:08x}; {k} -> {i} / {bo:04x}|{co:04x}");
+    println!("  page {n} @{po:08x}; {k} -> {i} / initial offset: {co:04x}");
 
     if co >= PAGE_SIZE {
         return Err(DataReadError::UnexpectedChunkOffset);
     }
-    let flen = file_size;
     let Some(mut h) = ChunkHeader::read_from_prefix(&data[co..]) else {
         return Err(DataReadError::ChunkParseError);
     };
@@ -359,13 +358,13 @@ pub fn read_data(
         h = ChunkHeader::read_from_prefix(&data[co..]).unwrap();
     }
 
-    let mut remaining = flen - res.len();
     loop {
         // A chunk must not cross the page boundary.
         if co + h.chunk_size() > PAGE_SIZE {
             return Err(DataReadError::UnexpectedChunkSize);
         }
 
+        let remaining = file_size - res.len();
         let read_size = h.data_size().min(remaining);
         if VERBOSE {
             println!("Reading {read_size:4} bytes / {h} @ {:08x}", po + co);
@@ -373,18 +372,18 @@ pub fn read_data(
         let cdo = h.meta.data_offset();
         let o = co + cdo;
         res.extend_from_slice(&data[o..o + read_size]);
-        remaining = flen - res.len();
+
+        // We are done if we reached the desired length of the file.
+        let remaining = file_size - res.len();
+        if remaining == 0 {
+            return Ok(DataReadResult::Done);
+        }
 
         // TODO: handle the Rust way
         if cdo == 5 {
             let p = FilePath::read_from_prefix(&data[co + 2..]).unwrap();
             // continue to read from respective page
             return Ok(DataReadResult::Need(p));
-        }
-
-        // We are done if we reached the desired length of the file.
-        if remaining == 0 {
-            return Ok(DataReadResult::Done);
         }
 
         // Look at the next offset / chunk.

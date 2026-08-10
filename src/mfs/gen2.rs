@@ -9,6 +9,7 @@ use zerocopy::FromBytes;
 use zerocopy_derive::{FromBytes, FromZeroes};
 
 const EXTRACT: bool = true;
+const VERBOSE: bool = true;
 
 const MAGIC: u32 = u32::from_le_bytes(*b"MFS\0");
 const PAGE_SIZE: usize = 0x4000;
@@ -343,33 +344,32 @@ pub fn read_data(
         return Err(DataReadError::ChunkParseError);
     };
 
-    let mut remaining = flen - res.len();
-    let mut seek = true;
-
-    println!("seek, remaining: {remaining}");
-    loop {
-        // seek to first chunk belonging to file
-        while seek && h.meta.file_num() != file_path.file_num {
+    // seek to first chunk belonging to file
+    while h.meta.file_num() != file_path.file_num {
+        if VERBOSE {
             println!("Skipping             {h} @ {:08x}", po + co);
-            // next offset
-            co += h.aligned();
-            if co > PAGE_SIZE - ALIGNMENT {
-                return Err(DataReadError::NotInPage);
-            }
-            if h.meta.chunk_type() == ChunkType::Unknown {
-                return Err(DataReadError::UnknownChunk);
-            }
-            h = ChunkHeader::read_from_prefix(&data[co..]).unwrap();
+        } // next offset
+        co += h.aligned();
+        if co > PAGE_SIZE - ALIGNMENT {
+            return Err(DataReadError::NotInPage);
         }
-        seek = false;
+        if h.meta.chunk_type() == ChunkType::Unknown {
+            return Err(DataReadError::UnknownChunk);
+        }
+        h = ChunkHeader::read_from_prefix(&data[co..]).unwrap();
+    }
 
+    let mut remaining = flen - res.len();
+    loop {
         // A chunk must not cross the page boundary.
         if co + h.chunk_size() > PAGE_SIZE {
             return Err(DataReadError::UnexpectedChunkSize);
         }
 
         let read_size = h.data_size().min(remaining);
-        println!("Reading {read_size:4} bytes / {h} @ {:08x}", po + co);
+        if VERBOSE {
+            println!("Reading {read_size:4} bytes / {h} @ {:08x}", po + co);
+        }
         let cdo = h.meta.data_offset();
         let o = co + cdo;
         res.extend_from_slice(&data[o..o + read_size]);

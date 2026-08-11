@@ -8,8 +8,12 @@ use strum::Display;
 use zerocopy::FromBytes;
 use zerocopy_derive::{FromBytes, FromZeroes};
 
+// write out files to a directory (`xdump/`)
 const EXTRACT: bool = true;
+// verbose output
 const VERBOSE: bool = true;
+// write out a new file with the pages sorted
+const WRITE_SORTED: bool = false;
 
 const MAGIC: u32 = u32::from_le_bytes(*b"MFS\0");
 const PAGE_SIZE: usize = 0x4000;
@@ -342,6 +346,9 @@ pub fn read_data(
     let Some(mut h) = ChunkHeader::read_from_prefix(&data[co..]) else {
         return Err(DataReadError::ChunkParseError);
     };
+    if h.meta.chunk_type() == ChunkType::Unknown {
+        return Err(DataReadError::UnknownChunk);
+    }
 
     // seek to first chunk belonging to file
     while h.meta.file_num() != file_path.file_num {
@@ -352,10 +359,13 @@ pub fn read_data(
         if co > PAGE_SIZE - ALIGNMENT {
             return Err(DataReadError::NotInPage);
         }
+        let Some(nh) = ChunkHeader::read_from_prefix(&data[co..]) else {
+            return Err(DataReadError::ChunkParseError);
+        };
+        h = nh;
         if h.meta.chunk_type() == ChunkType::Unknown {
             return Err(DataReadError::UnknownChunk);
         }
-        h = ChunkHeader::read_from_prefix(&data[co..]).unwrap();
     }
 
     loop {
@@ -381,7 +391,9 @@ pub fn read_data(
 
         // TODO: handle the Rust way
         if cdo == 5 {
-            let p = FilePath::read_from_prefix(&data[co + 2..]).unwrap();
+            let Some(p) = FilePath::read_from_prefix(&data[co + 2..]) else {
+                return Err(DataReadError::ChunkParseError);
+            };
             // continue to read from respective page
             return Ok(DataReadResult::Need(p));
         }
@@ -394,7 +406,10 @@ pub fn read_data(
         if h.meta.chunk_type() == ChunkType::Unknown {
             return Err(DataReadError::UnknownChunk);
         }
-        h = ChunkHeader::read_from_prefix(&data[co..]).unwrap();
+        let Some(nh) = ChunkHeader::read_from_prefix(&data[co..]) else {
+            return Err(DataReadError::ChunkParseError);
+        };
+        h = nh;
     }
 }
 
@@ -539,7 +554,7 @@ pub fn parse(data: &[u8], verbose: bool) -> Result<bool, String> {
 
     pages.sort_by_key(|p| p.header.num);
 
-    if false {
+    if WRITE_SORTED {
         use std::io::Write;
         let mut file = std::fs::File::create("sorted.bin").unwrap();
         for p in &pages {
@@ -660,8 +675,11 @@ pub fn parse(data: &[u8], verbose: bool) -> Result<bool, String> {
     println!("{total_dead_chunks} dead chunks total");
 
     if true {
-        for i in 0..140 {
+        for i in 0..log.len() {
             let file = log.get(i).unwrap();
+            if (file.flags >> 4) < 4 {
+                break;
+            }
             process_file(i, file, &pages, data);
             println!();
         }

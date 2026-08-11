@@ -222,7 +222,8 @@ pub struct FileId([u8; 3]);
 
 impl Display for FileId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:02x}{:02x}{:02x}", self.0[0], self.0[1], self.0[2])
+        // Endianness fun
+        write!(f, "{:02x}{:02x}{:02x}", self.0[2], self.0[0], self.0[1])
     }
 }
 

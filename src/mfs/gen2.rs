@@ -215,18 +215,6 @@ impl Chunk {
     }
 }
 
-#[derive(
-    FromBytes, FromZeroes, Serialize, Deserialize, Clone, Copy, Debug, Eq, PartialEq, Hash,
-)]
-pub struct FileId([u8; 3]);
-
-impl Display for FileId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // Endianness fun
-        write!(f, "{:02x}{:02x}{:02x}", self.0[2], self.0[0], self.0[1])
-    }
-}
-
 #[derive(FromBytes, FromZeroes, Serialize, Deserialize, Clone, Copy, Debug)]
 #[repr(C, packed)]
 pub struct FilePath {
@@ -251,8 +239,9 @@ pub struct FileEntry {
     pub state: u8,
     pub flags: u8,
 
-    pub id: FileId,
+    pub id: u16,
 
+    pub xx: u8,
     pub owner: u8, // not sure
     pub size: u16,
 
@@ -261,19 +250,24 @@ pub struct FileEntry {
 
 impl Display for FileEntry {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let id = self.id;
-        let sz = self.size;
         let st = self.state;
         let fl = self.flags;
+
+        let id = self.id;
+
+        let x = self.xx;
         let ow = self.owner;
+
+        let sz = self.size;
         let p = self.path;
 
         // apparently, some special values occur frequently
         // let m = match st {
-        //     0x70fc => "FC",
-        //     0x70dc => "DC",
-        //     0x70cc => "CC",
-        //     0x70c8 => "C8",
+        //     0xfc => "FC",
+        //     0xdc => "DC",
+        //     0xcc => "CC",
+        //     0x5c => "5C",
+        //     0xc8 => "C8",
         //     _ => "..",
         // };
 
@@ -288,7 +282,10 @@ impl Display for FileEntry {
         let sth = st >> 4;
         let tt = format!("{st:02x} ({sth:04b} {stl:04b})");
 
-        write!(f, "{id} {sz:5} {ow:02x}  {p}  {tt}, {fl:04b}{fli}")
+        write!(
+            f,
+            "{id:04x} {x:02x} {ow:02x}  {sz:5}  {p}  {tt}, {fl:04b}{fli}"
+        )
     }
 }
 

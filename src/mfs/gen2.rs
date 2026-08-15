@@ -1,5 +1,6 @@
 use core::fmt::{self, Debug, Display};
 use core::mem::size_of;
+use std::path::PathBuf;
 
 use bitfield_struct::bitfield;
 use serde::{Deserialize, Serialize};
@@ -229,7 +230,7 @@ impl Display for FilePath {
         let ok = self.offset_key;
         let pg = self.page;
 
-        write!(f, "p{pg:3}/k{ok:3}/n{no:3}")
+        write!(f, "p{pg:03}/k{ok:02x}/n{no:02x}")
     }
 }
 
@@ -239,7 +240,7 @@ pub struct FileEntry {
     pub state: u8,
     pub flags: u8,
 
-    pub id: u16,
+    pub id: u16, // big endian
 
     pub xx: u8,
     pub owner: u8, // not sure
@@ -248,15 +249,20 @@ pub struct FileEntry {
     pub path: FilePath,
 }
 
+impl FileEntry {
+    pub fn name(&self) -> String {
+        let id = self.id.to_be();
+        let x = self.xx;
+        let o = self.owner;
+
+        format!("{id:04x}_{o:02x}_{x:02x}")
+    }
+}
+
 impl Display for FileEntry {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let st = self.state;
         let fl = self.flags;
-
-        let id = self.id;
-
-        let x = self.xx;
-        let ow = self.owner;
 
         let sz = self.size;
         let p = self.path;
@@ -271,21 +277,22 @@ impl Display for FileEntry {
         //     _ => "..",
         // };
 
+        let i = self.name();
+
+        let fll = fl & 0xf;
         // only high 4 bits are set
-        let fl = fl >> 4;
-        let fli = match fl {
+        let flh = fl >> 4;
+        let fli = match flh {
             ..4 => " ",
             _ => "!",
         };
+        let ll = format!("{fl:02x} ({flh:04b} {fll:04b}) {fli}");
 
         let stl = st & 0xf;
         let sth = st >> 4;
         let tt = format!("{st:02x} ({sth:04b} {stl:04b})");
 
-        write!(
-            f,
-            "{id:04x} {x:02x} {ow:02x}  {sz:5}  {p}  {tt}, {fl:04b}{fli}"
-        )
+        write!(f, "{i}  {sz:5}  {p}  {tt}, {ll}")
     }
 }
 
@@ -295,7 +302,7 @@ const INDICES_SIZE: usize = 0x40;
 #[repr(C, packed)]
 pub struct Indices(#[serde(with = "serde_bytes")] [u8; INDICES_SIZE]);
 
-const SMTH_SIZE: usize = size_of::<FileEntry>();
+const FILE_ENTRY_SIZE: usize = size_of::<FileEntry>();
 
 // TODO: evaluate header length, separate from page 0
 const PAGE_HEADER_LENGTH: usize = 0x90;
@@ -411,46 +418,59 @@ pub fn read_data(
     }
 }
 
-fn process_file(i: usize, file: &FileEntry, pages: &[Page], data: &[u8]) {
-    let id = file.id;
+fn process_file(
+    i: usize,
+    file: &FileEntry,
+    pages: &[Page],
+    data: &[u8],
+    extract_path: &Option<PathBuf>,
+) {
     let sz = file.size;
     let mut file_path = file.path;
 
     let mut d = vec![];
 
-    let ono = file_path.file_num;
+    let fno = file_path.file_num;
+    let ido = file.name();
+    let name = format!("{ido}_{fno}_{i:03}");
+
     loop {
-        let no = file_path.file_num;
-        // TODO: handle error
-        let p = pages
-            .iter()
-            .find(|p| p.header.num == file_path.page)
-            .unwrap();
+        let pnum = file_path.page;
+        let Some(p) = pages.iter().find(|p| p.header.num == pnum) else {
+            println!("File {name}: page {pnum} not found");
+            return;
+        };
         let po = p.offset;
 
         let page_data = &data[po..po + PAGE_SIZE];
+        let progress = format!("{}/{sz}", d.len());
         match read_data(page_data, p, &file_path, file.size as usize, &mut d) {
             Ok(DataReadResult::Done) => {
                 let all_read = sz as usize == d.len();
                 let a = if all_read { "OK" } else { "NO" };
-                println!("File #{i:3} / {id}_{no}: read {}/{sz} {a}", d.len());
+                println!("File {name}: read {progress}: {a}");
 
-                if EXTRACT {
-                    use std::fs::File;
-                    use std::io::Write;
+                if let Some(epath) = extract_path {
+                    let file_name = format!("{name}.bin");
+                    let out = epath.join(file_name);
+                    println!("{out:?}");
 
-                    let mut f = File::create(format!("xdump/{id}_{ono}.bin")).unwrap();
-                    f.write_all(&d).unwrap();
+                    if EXTRACT {
+                        use std::fs::File;
+                        use std::io::Write;
+                        let mut f = File::create(out).unwrap();
+                        f.write_all(&d).unwrap();
+                    }
                 }
 
                 break;
             }
             Ok(DataReadResult::Need(p)) => {
-                println!("File #{i:3} / {id}_{no}: read {}/{sz}, need more", d.len());
+                println!("File {name}: read {progress}, need {p}");
                 file_path = p;
             }
             Err(e) => {
-                println!("File #{i:3} / {id}_{no}: read {}/{sz}, error {e}", d.len());
+                println!("File {name}: read {progress}, error {e}");
                 return;
             }
         }
@@ -465,8 +485,10 @@ pub fn parse(data: &[u8], verbose: bool) -> Result<bool, String> {
         return Err(format!("Size is not a multiple of page size ({PAGE_SIZE})"));
     }
 
+    let extract_dir = Some(PathBuf::from("xdump"));
+
     let mut pages = Vec::<Page>::new();
-    let mut log = Vec::<FileEntry>::new();
+    let mut files = Vec::<FileEntry>::new();
 
     // TODO: separate first page already
     for offset in (0..size).step_by(PAGE_SIZE) {
@@ -562,54 +584,48 @@ pub fn parse(data: &[u8], verbose: bool) -> Result<bool, String> {
         }
     }
 
-    // first page has MFS magic and some sort of metadata
-    let mut i = 0;
+    // first page has MFS magic and the list of files
     if let Some(p0) = pages.first() {
         let m = u32::from_le_bytes(p0.header.magic);
         if m != MAGIC {
             return Err("Gen2 MFS: page 0 does not have expected magic".to_string());
         } else {
+            let mut pos = p0.offset + PAGE_HEADER_SIZE;
             loop {
-                let pos = p0.offset + PAGE_HEADER_SIZE + i * SMTH_SIZE;
-                let smth = FileEntry::read_from_prefix(&data[pos..]).unwrap();
-                if smth.flags == 0xff && smth.state == 0xff {
+                pos += FILE_ENTRY_SIZE;
+                if pos > p0.offset + PAGE_SIZE {
+                    break;
+                }
+                let mut e = FileEntry::read_from_prefix(&data[pos..]).unwrap();
+                if e.flags == 0xff && e.state == 0xff {
                     // no idea yet how to get the length here
                     break;
                 }
-                log.push(smth);
-                i += 1;
+                // XXX: very special cases only seen once so far
+                if e.flags == 0x00 && e.state == 0x8f || e.flags == 0x02 && e.state == 0x34 {
+                    pos += 5;
+                    e = FileEntry::read_from_prefix(&data[pos..]).unwrap();
+                }
+                files.push(e);
             }
         }
     }
 
     println!();
     println!("== List of files (page 0)");
-    /*
-    log.sort_by(|a, b| {
-        let na = a._0;
-        let nb = b._0;
-        na.cmp(&nb)
-    });
-    log.sort_by(|a, b| {
-        let na = a.id;
-        let nb = b.id;
-        na.cmp(&nb)
-    });
-    log.sort_by(|a, b| {
-        let na = a._9;
-        let nb = b._9;
-        na.cmp(&nb)
-    });
-    */
+    if false && !EXTRACT {
+        files.sort_by_key(|e| e.id.to_be());
+    }
 
-    for (i, s) in log.iter().enumerate() {
+    println!("idx   ID   X  O   size   page/key/fno         ...");
+    for (i, s) in files.iter().enumerate() {
         println!("{i:04}: {s}");
     }
     println!();
 
-    let unique = log.iter().map(|i| i.id).collect::<HashSet<_>>();
+    let unique = files.iter().map(|i| i.id).collect::<HashSet<_>>();
 
-    println!("{} entries, {} unique", log.len(), unique.len());
+    println!("{} entries, {} unique", files.len(), unique.len());
     println!();
 
     let mut total_live_chunks = 0;
@@ -673,18 +689,18 @@ pub fn parse(data: &[u8], verbose: bool) -> Result<bool, String> {
     println!("{total_dead_chunks} dead chunks total");
 
     if true {
-        for i in 0..log.len() {
-            let file = log.get(i).unwrap();
+        for i in 0..files.len() {
+            let file = files.get(i).unwrap();
             if (file.flags >> 4) < 4 {
                 break;
             }
-            process_file(i, file, &pages, data);
+            process_file(i, file, &pages, data, &extract_dir);
             println!();
         }
     }
 
     // let i = 92;
-    // let file = log.get(i).unwrap();
+    // let file = files.get(i).unwrap();
     // process_file(i, file, &pages, data);
 
     Ok(true)

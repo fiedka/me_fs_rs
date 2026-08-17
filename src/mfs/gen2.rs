@@ -596,15 +596,16 @@ pub fn parse(data: &[u8], verbose: bool) -> Result<bool, String> {
                 if pos > p0.offset + PAGE_SIZE {
                     break;
                 }
-                let mut e = FileEntry::read_from_prefix(&data[pos..]).unwrap();
+                let e = FileEntry::read_from_prefix(&data[pos..]).unwrap();
                 if e.flags == 0xff && e.state == 0xff {
                     // no idea yet how to get the length here
                     break;
                 }
-                // XXX: very special cases only seen once so far
-                if e.flags == 0x00 && e.state == 0x8f || e.flags == 0x02 && e.state == 0x34 {
+                let size: u16 = u16::read_from_prefix(&data[pos + FILE_ENTRY_SIZE..]).unwrap();
+                if size == e.size {
+                    let b = &data[pos + FILE_ENTRY_SIZE..pos + FILE_ENTRY_SIZE + 5];
+                    println!("extra: {b:x?}");
                     pos += 5;
-                    e = FileEntry::read_from_prefix(&data[pos..]).unwrap();
                 }
                 files.push(e);
             }

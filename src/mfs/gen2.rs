@@ -230,7 +230,7 @@ impl Display for FilePath {
         let ok = self.offset_key;
         let pg = self.page;
 
-        write!(f, "p{pg:03}/k{ok:02x}/n{no:02x}")
+        write!(f, "p{pg:03}-k{ok:02x}-n{no:02x}")
     }
 }
 
@@ -259,12 +259,12 @@ pub struct BaseFileEntry {
 }
 
 impl BaseFileEntry {
-    pub fn name(&self) -> String {
+    pub fn idox(&self) -> String {
         let id = self.id.to_be();
         let x = self.xx;
         let o = self.owner;
 
-        format!("{id:04x}_{o:02x}_{x:02x}")
+        format!("{id:04x}-{o:02x}-{x:02x}")
     }
 }
 
@@ -276,32 +276,35 @@ impl Display for BaseFileEntry {
         let sz = self.size;
         let p = self.path;
 
-        // apparently, some special values occur frequently
-        // let m = match st {
-        //     0xfc => "FC",
-        //     0xdc => "DC",
-        //     0xcc => "CC",
-        //     0x5c => "5C",
-        //     0xc8 => "C8",
-        //     _ => "..",
-        // };
+        let i = self.idox();
 
-        let i = self.name();
+        // values seen so far; usually ending in C (0b1100) or 8 (0b1000)
+        let sx = match st {
+            0x1c => "1C",
+            0x5c => "5C",
+            0xcc => "CC",
+            0xdc => "DC", // present?
+            0xec => "EC",
+            0xfc => "FC",
 
-        let fll = fl & 0xf;
-        // only high 4 bits are set
-        let flh = fl >> 4;
-        let fli = match flh {
+            0x48 => "48",
+            0xc8 => "C8", // overwritten?
+            _ => "..",
+        };
+        let tt = format!("{st:02x} ({sx})");
+
+        // only high 4 bits are set, usually >=4
+        let flh = match fl >> 4 {
             ..4 => " ",
             _ => "!",
         };
-        let ll = format!("{fl:02x} ({flh:04b} {fll:04b}) {fli}");
+        let fll = match fl & 0xf {
+            0 => " ",
+            _ => "?",
+        };
+        let ll = format!("{fl:02x}{flh}{fll}");
 
-        let stl = st & 0xf;
-        let sth = st >> 4;
-        let tt = format!("{st:02x} ({sth:04b} {stl:04b})");
-
-        write!(f, "{i}  {sz:5}  {p}  {tt}, {ll}")
+        write!(f, "{i}  {sz:5}  {p}  {tt}  {ll}")
     }
 }
 
@@ -326,10 +329,10 @@ impl FileEntry {
         }
     }
 
-    pub fn name(&self) -> String {
+    pub fn idox(&self) -> String {
         match self {
-            FileEntry::Simple(e) => e.name(),
-            FileEntry::Extended(e) => e.entry.name(),
+            FileEntry::Simple(e) => e.idox(),
+            FileEntry::Extended(e) => e.entry.idox(),
         }
     }
 
@@ -519,7 +522,7 @@ fn save_file(path: &Option<PathBuf>, name: &str, data: &[u8]) {
     if let Some(p) = path {
         let file_name = format!("{name}.bin");
         let out = p.join(file_name);
-        println!("{out:?}");
+        println!("saving {out:?}");
 
         if EXTRACT {
             use std::fs::File;
@@ -538,10 +541,9 @@ fn process_file(
     extract_path: &Option<PathBuf>,
 ) {
     let file_path = file.path();
-    let file_num = file_path.file_num;
-    let ido = file.name();
+    let idox = file.idox();
     let size = file.size();
-    let name = format!("{ido}_{file_num}_{i:03}");
+    let name = format!("{idox}_{file_path}_{i:03}");
 
     match read_file(&file_path, name.as_str(), size, pages, data) {
         Ok(d) => save_file(extract_path, name.as_str(), &d),
@@ -550,8 +552,7 @@ fn process_file(
 
     if let FileEntry::Extended(e) = file {
         let file_path = e.path;
-        let file_num = file_path.file_num;
-        let name = format!("{ido}_{file_num}_{i:03}");
+        let name = format!("{idox}_{file_path}_{i:03}");
 
         match read_file(&file_path, name.as_str(), size, pages, data) {
             Ok(d) => save_file(extract_path, name.as_str(), &d),
@@ -704,7 +705,7 @@ pub fn parse(data: &[u8], verbose: bool) -> Result<bool, String> {
         files.sort_by_key(|e| e.id());
     }
 
-    println!("idx   ID   X  O   size   page/key/fno         ...");
+    println!(" i    ID   X  O   size   page/key/fno         ...");
     for (i, s) in files.iter().enumerate() {
         println!("{i:04}: {s}");
     }

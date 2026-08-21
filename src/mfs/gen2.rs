@@ -236,7 +236,16 @@ impl Display for FilePath {
 
 #[derive(FromBytes, FromZeroes, Serialize, Deserialize, Clone, Copy, Debug)]
 #[repr(C, packed)]
-pub struct FileEntry {
+pub struct ExtendedFileEntry {
+    pub entry: BaseFileEntry,
+
+    pub size: u16,
+    pub path: FilePath,
+}
+
+#[derive(FromBytes, FromZeroes, Serialize, Deserialize, Clone, Copy, Debug)]
+#[repr(C, packed)]
+pub struct BaseFileEntry {
     pub state: u8,
     pub flags: u8,
 
@@ -244,12 +253,12 @@ pub struct FileEntry {
 
     pub xx: u8,
     pub owner: u8, // not sure
-    pub size: u16,
 
+    pub size: u16,
     pub path: FilePath,
 }
 
-impl FileEntry {
+impl BaseFileEntry {
     pub fn name(&self) -> String {
         let id = self.id.to_be();
         let x = self.xx;
@@ -259,7 +268,7 @@ impl FileEntry {
     }
 }
 
-impl Display for FileEntry {
+impl Display for BaseFileEntry {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let st = self.state;
         let fl = self.flags;
@@ -296,13 +305,65 @@ impl Display for FileEntry {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+pub enum FileEntry {
+    Simple(BaseFileEntry),
+    Extended(ExtendedFileEntry),
+}
+
+impl FileEntry {
+    pub fn id(&self) -> u16 {
+        match self {
+            FileEntry::Simple(e) => e.id.to_be(),
+            FileEntry::Extended(e) => e.entry.id.to_be(),
+        }
+    }
+
+    pub fn flags(&self) -> u8 {
+        match self {
+            FileEntry::Simple(e) => e.flags,
+            FileEntry::Extended(e) => e.entry.flags,
+        }
+    }
+
+    pub fn name(&self) -> String {
+        match self {
+            FileEntry::Simple(e) => e.name(),
+            FileEntry::Extended(e) => e.entry.name(),
+        }
+    }
+
+    pub fn path(&self) -> FilePath {
+        match self {
+            FileEntry::Simple(e) => e.path,
+            FileEntry::Extended(e) => e.entry.path,
+        }
+    }
+
+    pub fn size(&self) -> usize {
+        match self {
+            FileEntry::Simple(e) => e.size as usize,
+            FileEntry::Extended(e) => e.entry.size as usize,
+        }
+    }
+}
+
+impl Display for FileEntry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            FileEntry::Simple(e) => write!(f, "{e}"),
+            FileEntry::Extended(e) => write!(f, "{}", e.entry),
+        }
+    }
+}
+
 const INDICES_SIZE: usize = 0x40;
 
 #[derive(FromBytes, FromZeroes, Clone, Copy, Debug, Serialize, Deserialize)]
 #[repr(C, packed)]
 pub struct Indices(#[serde(with = "serde_bytes")] [u8; INDICES_SIZE]);
 
-const FILE_ENTRY_SIZE: usize = size_of::<FileEntry>();
+const BASE_FILE_ENTRY_SIZE: usize = size_of::<BaseFileEntry>();
 
 // TODO: evaluate header length, separate from page 0
 const PAGE_HEADER_LENGTH: usize = 0x90;
@@ -418,6 +479,57 @@ pub fn read_data(
     }
 }
 
+fn read_file(
+    file_path: &FilePath,
+    name: &str,
+    size: usize,
+    pages: &[Page],
+    data: &[u8],
+) -> Result<Vec<u8>, String> {
+    let mut file_path = file_path.clone();
+    let mut d = vec![];
+    loop {
+        let pnum = file_path.page;
+        let Some(p) = pages.iter().find(|p| p.header.num == pnum) else {
+            return Err(format!("page {pnum} not found"));
+        };
+        let po = p.offset;
+
+        let page_data = &data[po..po + PAGE_SIZE];
+        let progress = format!("{}/{size}", d.len());
+        match read_data(page_data, p, &file_path, size, &mut d) {
+            Ok(DataReadResult::Done) => {
+                let all_read = size == d.len();
+                let a = if all_read { "OK" } else { "NO" };
+                println!("File {name}: read {progress}: {a}");
+                return Ok(d);
+            }
+            Ok(DataReadResult::Need(p)) => {
+                println!("File {name}: read {progress}, need {p}");
+                file_path = p;
+            }
+            Err(e) => {
+                return Err(format!("File {name}: read {progress}, error {e}"));
+            }
+        }
+    }
+}
+
+fn save_file(path: &Option<PathBuf>, name: &str, data: &[u8]) {
+    if let Some(p) = path {
+        let file_name = format!("{name}.bin");
+        let out = p.join(file_name);
+        println!("{out:?}");
+
+        if EXTRACT {
+            use std::fs::File;
+            use std::io::Write;
+            let mut f = File::create(out).unwrap();
+            f.write_all(data).unwrap();
+        }
+    }
+}
+
 fn process_file(
     i: usize,
     file: &FileEntry,
@@ -425,54 +537,25 @@ fn process_file(
     data: &[u8],
     extract_path: &Option<PathBuf>,
 ) {
-    let sz = file.size;
-    let mut file_path = file.path;
-
-    let mut d = vec![];
-
-    let fno = file_path.file_num;
+    let file_path = file.path();
+    let file_num = file_path.file_num;
     let ido = file.name();
-    let name = format!("{ido}_{fno}_{i:03}");
+    let size = file.size();
+    let name = format!("{ido}_{file_num}_{i:03}");
 
-    loop {
-        let pnum = file_path.page;
-        let Some(p) = pages.iter().find(|p| p.header.num == pnum) else {
-            println!("File {name}: page {pnum} not found");
-            return;
-        };
-        let po = p.offset;
+    match read_file(&file_path, name.as_str(), size, pages, data) {
+        Ok(d) => save_file(extract_path, name.as_str(), &d),
+        Err(e) => println!("{e}"),
+    }
 
-        let page_data = &data[po..po + PAGE_SIZE];
-        let progress = format!("{}/{sz}", d.len());
-        match read_data(page_data, p, &file_path, file.size as usize, &mut d) {
-            Ok(DataReadResult::Done) => {
-                let all_read = sz as usize == d.len();
-                let a = if all_read { "OK" } else { "NO" };
-                println!("File {name}: read {progress}: {a}");
+    if let FileEntry::Extended(e) = file {
+        let file_path = e.path;
+        let file_num = file_path.file_num;
+        let name = format!("{ido}_{file_num}_{i:03}");
 
-                if let Some(epath) = extract_path {
-                    let file_name = format!("{name}.bin");
-                    let out = epath.join(file_name);
-                    println!("{out:?}");
-
-                    if EXTRACT {
-                        use std::fs::File;
-                        use std::io::Write;
-                        let mut f = File::create(out).unwrap();
-                        f.write_all(&d).unwrap();
-                    }
-                }
-
-                break;
-            }
-            Ok(DataReadResult::Need(p)) => {
-                println!("File {name}: read {progress}, need {p}");
-                file_path = p;
-            }
-            Err(e) => {
-                println!("File {name}: read {progress}, error {e}");
-                return;
-            }
+        match read_file(&file_path, name.as_str(), size, pages, data) {
+            Ok(d) => save_file(extract_path, name.as_str(), &d),
+            Err(e) => println!("{e}"),
         }
     }
 }
@@ -592,22 +675,25 @@ pub fn parse(data: &[u8], verbose: bool) -> Result<bool, String> {
         } else {
             let mut pos = p0.offset + PAGE_HEADER_SIZE;
             loop {
-                pos += FILE_ENTRY_SIZE;
+                pos += BASE_FILE_ENTRY_SIZE;
                 if pos > p0.offset + PAGE_SIZE {
                     break;
                 }
-                let e = FileEntry::read_from_prefix(&data[pos..]).unwrap();
-                if e.flags == 0xff && e.state == 0xff {
-                    // no idea yet how to get the length here
+                let entry = BaseFileEntry::read_from_prefix(&data[pos..]).unwrap();
+                if entry.flags == 0xff && entry.state == 0xff {
+                    // no length field found yet, so just break here
                     break;
                 }
-                let size: u16 = u16::read_from_prefix(&data[pos + FILE_ENTRY_SIZE..]).unwrap();
-                if size == e.size {
-                    let b = &data[pos + FILE_ENTRY_SIZE..pos + FILE_ENTRY_SIZE + 5];
-                    println!("extra: {b:x?}");
+                let o = pos + BASE_FILE_ENTRY_SIZE;
+                let size: u16 = u16::read_from_prefix(&data[o..]).unwrap();
+                if size == entry.size {
+                    let path = FilePath::read_from(&data[o + 2..o + 5]).unwrap();
                     pos += 5;
+                    let e = ExtendedFileEntry { entry, path, size };
+                    files.push(FileEntry::Extended(e));
+                } else {
+                    files.push(FileEntry::Simple(entry));
                 }
-                files.push(e);
             }
         }
     }
@@ -615,7 +701,7 @@ pub fn parse(data: &[u8], verbose: bool) -> Result<bool, String> {
     println!();
     println!("== List of files (page 0)");
     if false && !EXTRACT {
-        files.sort_by_key(|e| e.id.to_be());
+        files.sort_by_key(|e| e.id());
     }
 
     println!("idx   ID   X  O   size   page/key/fno         ...");
@@ -624,7 +710,7 @@ pub fn parse(data: &[u8], verbose: bool) -> Result<bool, String> {
     }
     println!();
 
-    let unique = files.iter().map(|i| i.id).collect::<HashSet<_>>();
+    let unique = files.iter().map(|i| i.id()).collect::<HashSet<_>>();
 
     println!("{} entries, {} unique", files.len(), unique.len());
     println!();
@@ -692,7 +778,10 @@ pub fn parse(data: &[u8], verbose: bool) -> Result<bool, String> {
     if true {
         for i in 0..files.len() {
             let file = files.get(i).unwrap();
-            if (file.flags >> 4) < 4 {
+            // not clear yet what the flags mean
+            let flags = file.flags();
+            if (flags >> 4) < 4 {
+                println!("WARNING: flags not as expected! {flags:08b}");
                 break;
             }
             process_file(i, file, &pages, data, &extract_dir);

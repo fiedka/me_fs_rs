@@ -24,6 +24,7 @@ name = "crc"
 path = "bin/crc.rs"
 
 [dependencies]
+ansi_term = "0.12.1"
 bitfield-struct = "0.13.0"
 clap = { version = "4.4.12", features = ["derive"] }
 crc = "3.2.1"

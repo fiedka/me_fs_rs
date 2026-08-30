@@ -249,7 +249,8 @@ pub struct BaseFileEntry {
     pub state: u8,
     pub flags: u8,
 
-    pub id: u16, // big endian
+    pub sub: u8, // sub ID or revision
+    pub id: u8,
 
     pub xx: u8,
     pub owner: u8, // not sure
@@ -260,11 +261,13 @@ pub struct BaseFileEntry {
 
 impl BaseFileEntry {
     pub fn idox(&self) -> String {
-        let id = self.id.to_be();
+        let i = self.id;
+        let s = self.sub;
+
         let x = self.xx;
         let o = self.owner;
 
-        format!("{id:04x}-{o:02x}-{x:02x}")
+        format!("{i:02x}-{s:02x}_{x:02x}-{o:02x}")
     }
 }
 
@@ -315,10 +318,10 @@ pub enum FileEntry {
 }
 
 impl FileEntry {
-    pub fn id(&self) -> u16 {
+    pub fn id(&self) -> u8 {
         match self {
-            FileEntry::Simple(e) => e.id.to_be(),
-            FileEntry::Extended(e) => e.entry.id.to_be(),
+            FileEntry::Simple(e) => e.id,
+            FileEntry::Extended(e) => e.entry.id,
         }
     }
 
@@ -376,6 +379,7 @@ const BLOCK_SIZE: usize = 0x100;
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Display)]
 pub enum DataReadError {
+    PageNotFound(usize),
     NotInPage,
     UnexpectedChunkSize,
     UnexpectedChunkOffset,
@@ -488,13 +492,13 @@ fn read_file(
     size: usize,
     pages: &[Page],
     data: &[u8],
-) -> Result<Vec<u8>, String> {
+) -> Result<Vec<u8>, DataReadError> {
     let mut file_path = file_path.clone();
     let mut d = vec![];
     loop {
         let pnum = file_path.page;
         let Some(p) = pages.iter().find(|p| p.header.num == pnum) else {
-            return Err(format!("page {pnum} not found"));
+            return Err(DataReadError::PageNotFound(pnum as usize));
         };
         let po = p.offset;
 
@@ -508,11 +512,12 @@ fn read_file(
                 return Ok(d);
             }
             Ok(DataReadResult::Need(p)) => {
-                println!("File {name}: read {progress}, need {p}");
+                println!("File {name}: read {progress}: need {p}");
                 file_path = p;
             }
             Err(e) => {
-                return Err(format!("File {name}: read {progress}, error {e}"));
+                println!("File {name}: read {progress}: {e}");
+                return Err(e);
             }
         }
     }
@@ -676,7 +681,6 @@ pub fn parse(data: &[u8], verbose: bool) -> Result<bool, String> {
         } else {
             let mut pos = p0.offset + PAGE_HEADER_SIZE;
             loop {
-                pos += BASE_FILE_ENTRY_SIZE;
                 if pos > p0.offset + PAGE_SIZE {
                     break;
                 }
@@ -695,6 +699,7 @@ pub fn parse(data: &[u8], verbose: bool) -> Result<bool, String> {
                 } else {
                     files.push(FileEntry::Simple(entry));
                 }
+                pos += BASE_FILE_ENTRY_SIZE;
             }
         }
     }

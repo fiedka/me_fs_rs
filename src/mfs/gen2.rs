@@ -739,11 +739,12 @@ pub fn parse(data: &[u8], extract_dir: Option<String>, verbose: bool) -> Result<
         files.sort_by_key(|e| e.id());
     }
 
-    println!(" i    ID   X  O   size   page/key/fno         ...");
+    println!(" i    ID S  X  O   size   page/key/fno         ...");
     for (i, s) in files.iter().enumerate() {
         println!("{i:04}: {s}");
         if let FileEntry::Extended(e) = s {
-            println!("  extra: {}", e.path);
+            let sz = e.size;
+            println!("              extra: {}  {}", sz, e.path);
         }
     }
     println!();

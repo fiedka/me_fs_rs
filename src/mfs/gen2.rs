@@ -259,15 +259,34 @@ pub struct BaseFileEntry {
     pub path: FilePath,
 }
 
+use ansi_term::Colour::{Cyan, Purple, Red};
+
+fn colored_hex(color: ansi_term::Color, value: u8) -> String {
+    let f = format!("{:02x}", value);
+    if value > 0 {
+        color.paint(f).to_string()
+    } else {
+        f
+    }
+}
+
 impl BaseFileEntry {
     pub fn idox(&self) -> String {
         let i = self.id;
         let s = self.sub;
-
         let x = self.xx;
         let o = self.owner;
 
         format!("{i:02x}-{s:02x}_{x:02x}-{o:02x}")
+    }
+
+    pub fn idox_colored(&self) -> String {
+        let i = self.id;
+        let s = colored_hex(Red, self.sub);
+        let x = colored_hex(Purple, self.xx);
+        let o = colored_hex(Cyan, self.owner);
+
+        format!("{i:02x}-{s}_{x}-{o}")
     }
 }
 
@@ -279,7 +298,7 @@ impl Display for BaseFileEntry {
         let sz = self.size;
         let p = self.path;
 
-        let i = self.idox();
+        let i = self.idox_colored();
 
         // values seen so far; usually ending in C (0b1100) or 8 (0b1000)
         let sx = match st {
@@ -546,8 +565,9 @@ fn process_file(
     extract_path: &Option<PathBuf>,
 ) {
     let file_path = file.path();
-    let idox = file.idox();
     let size = file.size();
+
+    let idox = file.idox();
     let name = format!("{idox}_{file_path}_{i:03}");
 
     match read_file(&file_path, name.as_str(), size, pages, data) {
@@ -558,6 +578,7 @@ fn process_file(
     if let FileEntry::Extended(e) = file {
         let file_path = e.path;
         let name = format!("{idox}_{file_path}_{i:03}");
+        println!("extra file found: {name}");
 
         match read_file(&file_path, name.as_str(), size, pages, data) {
             Ok(d) => save_file(extract_path, name.as_str(), &d),

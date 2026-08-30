@@ -713,7 +713,8 @@ pub fn parse(data: &[u8], verbose: bool) -> Result<bool, String> {
                 let s = entry.size;
                 println!("- file @{pos:04x}: {} / {} bytes", entry.path, s);
                 let o = pos + BASE_FILE_ENTRY_SIZE;
-                if entry.flags == 0xb0 {
+                // flags == 0xb0, or rather, bit 6 is NOT set
+                if entry.flags & (1 << 6) == 0 {
                     let path = FilePath::read_from(&data[o + 2..o + 5]).unwrap();
                     let size: u16 = u16::read_from_prefix(&data[o..]).unwrap();
                     println!("  extra file found @{o:04x}: {path} / {} bytes", size);

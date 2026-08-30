@@ -710,13 +710,16 @@ pub fn parse(data: &[u8], verbose: bool) -> Result<bool, String> {
                     // no length field found yet, so just break here
                     break;
                 }
+                let s = entry.size;
+                println!("- file @{pos:04x}: {} / {} bytes", entry.path, s);
                 let o = pos + BASE_FILE_ENTRY_SIZE;
-                let size: u16 = u16::read_from_prefix(&data[o..]).unwrap();
-                if size == entry.size {
+                if entry.flags == 0xb0 {
                     let path = FilePath::read_from(&data[o + 2..o + 5]).unwrap();
-                    pos += 5;
+                    let size: u16 = u16::read_from_prefix(&data[o..]).unwrap();
+                    println!("  extra file found @{o:04x}: {path} / {} bytes", size);
                     let e = ExtendedFileEntry { entry, path, size };
                     files.push(FileEntry::Extended(e));
+                    pos += 5;
                 } else {
                     files.push(FileEntry::Simple(entry));
                 }
@@ -734,6 +737,9 @@ pub fn parse(data: &[u8], verbose: bool) -> Result<bool, String> {
     println!(" i    ID   X  O   size   page/key/fno         ...");
     for (i, s) in files.iter().enumerate() {
         println!("{i:04}: {s}");
+        if let FileEntry::Extended(e) = s {
+            println!("  extra: {}", e.path);
+        }
     }
     println!();
 

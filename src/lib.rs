@@ -112,7 +112,8 @@ pub fn parse(data: &[u8]) -> Result<ME_FPT, String> {
                     }
                     MFS | AFSP | EFFS => {
                         if PARSE_MFS {
-                            if let Err(e) = mfs::parse(&data[o..o + s]) {
+                            // TODO: extract_dir
+                            if let Err(e) = mfs::parse(&data[o..o + s], None, debug) {
                                 println!("MFS: {e}");
                             }
                         }

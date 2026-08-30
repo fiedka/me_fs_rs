@@ -11,6 +11,10 @@ struct Args {
     #[arg(required = false, short, long)]
     verbose: bool,
 
+    /// Directory to extract to, will be created
+    #[arg(required = false, short, long)]
+    extract_dir: Option<String>,
+
     /// File to read
     #[arg(index = 1)]
     file: String,
@@ -22,7 +26,7 @@ fn main() -> io::Result<()> {
     println!("Parsing MFS in {file}");
 
     let data = fs::read(file).unwrap();
-    match parse(&data, args.verbose) {
+    match parse(&data, args.extract_dir, args.verbose) {
         Ok(_) => {}
         Err(e) => {
             println!("Error: {e}");

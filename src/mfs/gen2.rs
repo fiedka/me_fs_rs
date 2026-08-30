@@ -587,7 +587,7 @@ fn process_file(
     }
 }
 
-pub fn parse(data: &[u8], verbose: bool) -> Result<bool, String> {
+pub fn parse(data: &[u8], extract_dir: Option<String>, verbose: bool) -> Result<bool, String> {
     let size = data.len();
     println!("Trying to parse MFS for Gen 2, size: {size:08x}");
 
@@ -595,7 +595,11 @@ pub fn parse(data: &[u8], verbose: bool) -> Result<bool, String> {
         return Err(format!("Size is not a multiple of page size ({PAGE_SIZE})"));
     }
 
-    let extract_dir = Some(PathBuf::from("xdump"));
+    let extract_dir = extract_dir.map(PathBuf::from);
+
+    if let Some(d) = &extract_dir {
+        std::fs::create_dir_all(d).unwrap();
+    }
 
     let mut pages = Vec::<Page>::new();
     let mut files = Vec::<FileEntry>::new();
